@@ -21,8 +21,17 @@ directive in `go.mod`).
 
   The default stack stamps `X-Request-Id`, so which routes it reached is visible
   in the response headers.
+- **Auth on by default** — `AppConfig.Authenticator` resolves the user; every
+  endpoint requires one unless it declares `vov.NoAuth()`. `/tasks` says nothing
+  about auth and is protected anyway; `/healthz` and `/webhook` opt out. The
+  guard runs *inside* the middleware stack, so a 401 is still logged and still
+  carries a request id, and no `MiddlewareMod` can disable it.
+
+  A missing credential is a 401, but a *failing* authenticator is a 500 — a
+  broken session store is not a bad password. Try `Authorization: Bearer t-boom`.
 - **The escape hatch** — `GET /version` is registered straight on the underlying
-  mux via `app.Mux()`, bypassing vov (and so getting no middleware at all).
+  mux via `app.Mux()`, bypassing vov entirely: no middleware, no auth. Reaching
+  for the mux means taking full control.
 - **Server tuning** — a `vov.Server` (the `http.Server` knobs minus `Addr`/`Handler`)
   is supplied through `AppConfig.Server`; defaulted timeouts are pointers, set inline
   with `vov.Ptr`.
@@ -37,12 +46,19 @@ go run .
 
 Then, in another terminal:
 
+The demo token is `t-ramtin`:
+
 ```bash
-curl -si localhost:8080/healthz | grep -i x-request-id   # bare: no id
-curl -si localhost:8080/tasks | grep -i x-request-id     # inherited: id present
-curl -s -X POST localhost:8080/tasks -H 'Content-Type: application/json' -d '{"title":"write the tests"}'
-curl -s -X POST localhost:8080/tasks -H 'Content-Type: text/plain' -d 'nope'   # 415, added layer
-curl -s -X POST localhost:8080/webhook                   # 401, overridden stack
+curl -s localhost:8080/tasks                             # 401: protected by default
+curl -s localhost:8080/tasks -H 'Authorization: Bearer t-ramtin'
+curl -s localhost:8080/tasks -H 'Authorization: Bearer t-boom'   # 500, not 401
+curl -s -X POST localhost:8080/tasks -H 'Authorization: Bearer t-ramtin' \
+  -H 'Content-Type: application/json' -d '{"title":"write the tests"}'   # owner is set from the context
+curl -s -X POST localhost:8080/tasks -H 'Authorization: Bearer t-ramtin' \
+  -H 'Content-Type: text/plain' -d 'nope'                # 415, from the added layer
+
+curl -si localhost:8080/healthz | grep -i x-request-id   # bare: no id, no auth
+curl -s -X POST localhost:8080/webhook                   # 401, from the overridden stack
 curl -s -X POST localhost:8080/webhook -H 'X-Signature: sig'
 curl -s localhost:8080/version                           # via the mux escape hatch
 ```

@@ -1,17 +1,20 @@
 // Command tasks is a small example service built with the vov framework. It
 // exists to exercise vov's ergonomics from the outside: declarative endpoints, a
-// default middleware stack that endpoints inherit, extend, override, or drop, the
-// mux escape hatch, a cleanup hook, and a lifecycle-managed Run. It keeps its data
-// in memory and depends only on the standard library plus vov.
+// default middleware stack that endpoints inherit, extend, override, or drop,
+// authentication that applies unless a route opts out, the mux escape hatch, a
+// cleanup hook, and a lifecycle-managed Run. It keeps its data in memory and
+// depends only on the standard library plus vov.
 package main
 
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"log"
 	"net/http"
 	"sort"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -34,24 +37,29 @@ func main() {
 		// The default stack, applied to every endpoint that does not say
 		// otherwise. Outermost first: requestID wraps logging wraps the handler.
 		Middleware: []vov.Middleware{requestID, logging},
+		// How this app resolves the user of a request. Endpoints require one
+		// unless they declare vov.NoAuth().
+		Authenticator: authenticate,
 		Handlers: []vov.Endpoint{
-			// Bare: no default stack, no additions. A health check should not
-			// depend on any of it.
+			// Open and bare: no auth, no middleware. A health check should not
+			// depend on either.
 			{Method: http.MethodGet, Path: "/healthz", Handler: healthz,
-				Middleware: vov.NoMiddleware()},
+				MiddlewareMod: vov.NoMiddleware(), AuthMod: vov.NoAuth()},
 
-			// Inherit the default stack — the common case, so the field is unset.
+			// Nothing declared, so: default middleware stack, auth required.
+			// The majority case says nothing and is protected anyway.
 			{Method: http.MethodGet, Path: "/tasks", Handler: store.list},
 			{Method: http.MethodGet, Path: "/tasks/{id}", Handler: store.get},
 
-			// Extend: the default stack, plus one more layer inside it.
+			// Extend: the default stack, plus one more layer inside it. Still
+			// authenticated, because nothing here says otherwise.
 			{Method: http.MethodPost, Path: "/tasks", Handler: store.create,
-				Middleware: vov.ExtendMiddleware(requireJSON)},
+				MiddlewareMod: vov.ExtendMiddleware(requireJSON)},
 
-			// Override: a completely different stack. This route is authenticated
-			// by signature, not by the session the default stack would assume.
+			// A webhook: authenticated by signature rather than by user, so it
+			// opts out of auth and replaces the middleware stack entirely.
 			{Method: http.MethodPost, Path: "/webhook", Handler: webhook,
-				Middleware: vov.OverrideMiddleware(verifySignature)},
+				MiddlewareMod: vov.OverrideMiddleware(verifySignature), AuthMod: vov.NoAuth()},
 		},
 	})
 	if err != nil {
@@ -59,8 +67,8 @@ func main() {
 	}
 
 	// Escape hatch: register straight on the underlying mux, bypassing vov.
-	// Useful for anything vov does not model yet. Note that these routes get no
-	// middleware from the framework — not even the default stack.
+	// Useful for anything vov does not model yet. These routes are entirely
+	// yours — the framework adds no middleware and no auth to them.
 	app.Mux().HandleFunc("GET /version", func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]string{"version": "0.1.0"})
 	})
@@ -77,11 +85,48 @@ func main() {
 	}
 }
 
+// --- auth -------------------------------------------------------------------
+
+// user is this app's own model. It satisfies vov.User by answering the one
+// question vov asks; everything else about it stays the app's business.
+type user struct {
+	name string
+}
+
+func (u *user) IsAuthenticated() bool { return u != nil && u.name != "" }
+
+// authenticate is the app's vov.Authenticator: it owns the credential lookup,
+// which in a real service would hit a session table or verify a token.
+func authenticate(r *http.Request) (vov.User, error) {
+	token := strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")
+	switch token {
+	case "":
+		return nil, nil // no credentials presented -> 401
+	case "t-boom":
+		return nil, errors.New("session store unavailable") // -> 500, not 401
+	case "t-ramtin":
+		return &user{name: "ramtin"}, nil
+	default:
+		return nil, nil
+	}
+}
+
+// currentUser is the typed accessor the app defines over vov's interface. vov
+// hands back a vov.User; the concrete type reappears here, in one place.
+func currentUser(r *http.Request) *user {
+	u, ok := vov.UserFrom(r.Context())
+	if !ok {
+		return nil
+	}
+	return u.(*user)
+}
+
 // --- domain -----------------------------------------------------------------
 
 type task struct {
 	ID    int    `json:"id"`
 	Title string `json:"title"`
+	Owner string `json:"owner"`
 	Done  bool   `json:"done"`
 }
 
@@ -126,9 +171,11 @@ func (s *taskStore) create(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// The endpoint requires auth, so the guard has already run and there is
+	// always a user here.
 	s.mu.Lock()
 	s.nextID++
-	t := task{ID: s.nextID, Title: in.Title}
+	t := task{ID: s.nextID, Title: in.Title, Owner: currentUser(r).name}
 	s.items[t.ID] = t
 	s.mu.Unlock()
 
@@ -172,7 +219,9 @@ func requestID(next http.Handler) http.Handler {
 	})
 }
 
-// logging records method, path, and latency. Part of the default stack.
+// logging records method, path, and latency. Part of the default stack. Because
+// the auth guard runs inside the middleware chain, rejected requests are logged
+// here too.
 func logging(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		start := time.Now()

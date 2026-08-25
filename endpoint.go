@@ -24,7 +24,12 @@ type Endpoint struct {
 	// default stack ([AppConfig.Middleware]). The zero value inherits that stack;
 	// [ExtendMiddleware] adds to it, [OverrideMiddleware] replaces it, and
 	// [NoMiddleware] runs the handler bare.
-	Middleware MiddlewareStack
+	MiddlewareMod MiddlewareMod
+
+	// AuthMod declares this endpoint's authentication requirement. The zero
+	// value requires an authenticated user, so a route that says nothing is
+	// protected; [NoAuth] opts out.
+	AuthMod AuthMod
 }
 
 // pattern returns the ServeMux pattern for the endpoint: "METHOD /path" when a
@@ -36,8 +41,14 @@ func (e Endpoint) pattern() string {
 	return e.Method + " " + e.Path
 }
 
-// wrapped returns Handler with its effective middleware applied, outermost
-// first, resolved against the app-wide default stack.
-func (e Endpoint) wrapped(defaults []Middleware) http.Handler {
-	return apply(e.Handler, e.Middleware.resolve(defaults))
+// wrapped returns Handler with its auth guard and effective middleware applied.
+// The middleware chain is outermost (resolved against the app-wide default
+// stack), the auth guard sits inside it, and the handler is innermost — see
+// [authGuard] for why that order.
+func (e Endpoint) wrapped(defaults []Middleware, auth Authenticator) http.Handler {
+	var h http.Handler = e.Handler
+	if e.AuthMod.required() {
+		h = authGuard(h, auth)
+	}
+	return apply(h, e.MiddlewareMod.resolve(defaults))
 }

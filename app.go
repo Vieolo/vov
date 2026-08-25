@@ -33,6 +33,13 @@ type AppConfig struct {
 	// outside the framework and get no middleware from it.
 	Middleware []Middleware
 
+	// Authenticator resolves the user a request acts as. Endpoints require an
+	// authenticated user unless they declare [NoAuth], so this is required
+	// unless every endpoint opts out — [NewApp] rejects a configuration that
+	// needs an authenticator and has none, rather than starting a server whose
+	// every protected route answers 401.
+	Authenticator Authenticator
+
 	// Address is the TCP listen address, e.g. ":8080". Defaults to
 	// [DefaultAddress] when empty.
 	Address string
@@ -89,7 +96,13 @@ func NewApp(cfg AppConfig) (*App, error) {
 		}
 		seen[p] = struct{}{}
 
-		app.mux.Handle(p, e.wrapped(cfg.Middleware))
+		// Fail closed: a route that requires auth with no way to authenticate is
+		// a configuration bug, not a route that should quietly reject everyone.
+		if e.AuthMod.required() && cfg.Authenticator == nil {
+			return nil, fmt.Errorf("vov: handler %d (%s): requires auth but AppConfig.Authenticator is nil (declare vov.NoAuth() to make the route open)", i, p)
+		}
+
+		app.mux.Handle(p, e.wrapped(cfg.Middleware, cfg.Authenticator))
 		app.endpoints = append(app.endpoints, e)
 	}
 

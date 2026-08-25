@@ -9,6 +9,7 @@ Per the repo rules, run this instead of re-running the go/curl commands by hand.
 Each module is checked independently because `go ... ./...` never crosses a
 module boundary, so a break in one module stays invisible to the others.
 """
+import json
 import shutil
 import signal
 import socket
@@ -71,6 +72,9 @@ SMOKE_SHUTDOWN_WAIT = 20  # seconds; must exceed the app's ShutdownTimeout
 
 
 JSON_HDR = {"Content-Type": "application/json"}
+AUTH_HDR = {"Authorization": "Bearer t-ramtin"}
+BOOM_HDR = {"Authorization": "Bearer t-boom"}  # makes the authenticator fail
+JSON_AUTH = {**JSON_HDR, **AUTH_HDR}
 
 
 def _http(path: str, method: str = "GET", data: bytes | None = None, headers: dict | None = None):
@@ -135,42 +139,56 @@ def smoke() -> int:
                 if not ok:
                     failures.append(f"{label}: got {got}, want {want}")
 
-            # Routing and handler behavior.
-            status, hdrs, _ = _http("/healthz")
-            check("GET  /healthz", status, 200)
-            # Default stack dropped via NoMiddleware() -> no request id.
-            check("     /healthz is bare", "X-Request-Id" in hdrs, False)
+            # --- auth: required by default, escaped explicitly ---------------
+            # Declares nothing about auth, so it is protected.
+            status, hdrs, _ = _http("/tasks")
+            check("GET  /tasks (no credentials)", status, 401)
+            # The guard runs inside the middleware chain, so a 401 is still
+            # stamped by the default stack (and logged).
+            check("     401 still has request id", "X-Request-Id" in hdrs, True)
 
-            status, hdrs, _ = _http("/tasks", "POST", b'{"title":"write the tests"}', JSON_HDR)
+            # A failing authenticator is a broken dependency, not a bad password.
+            status, _, _ = _http("/tasks", headers=BOOM_HDR)
+            check("GET  /tasks (authenticator fails)", status, 500)
+
+            status, hdrs, _ = _http("/tasks", headers=AUTH_HDR)
+            check("GET  /tasks (authenticated)", status, 200)
+            check("     /tasks inherits defaults", "X-Request-Id" in hdrs, True)
+
+            # --- routing and handler behavior --------------------------------
+            status, hdrs, body = _http("/tasks", "POST", b'{"title":"write the tests"}', JSON_AUTH)
             check("POST /tasks", status, 201)
             # Extend keeps the default stack, so the request id is still stamped.
             check("     /tasks POST keeps defaults", "X-Request-Id" in hdrs, True)
+            # The handler read the user out of the request context.
+            check("     task owner from context", json.loads(body).get("owner"), "ramtin")
 
-            status, _, _ = _http("/tasks", "POST", b"{}", JSON_HDR)
+            status, _, _ = _http("/tasks", "POST", b"{}", JSON_AUTH)
             check("POST /tasks (no title)", status, 400)
 
             # The extra middleware layer this endpoint added on top of the defaults.
-            status, _, _ = _http("/tasks", "POST", b"nope", {"Content-Type": "text/plain"})
+            status, _, _ = _http("/tasks", "POST", b"nope", {**AUTH_HDR, "Content-Type": "text/plain"})
             check("POST /tasks (not JSON)", status, 415)
 
-            status, hdrs, _ = _http("/tasks")
-            check("GET  /tasks", status, 200)
-            # Field unset -> inherits the default stack.
-            check("     /tasks inherits defaults", "X-Request-Id" in hdrs, True)
-
-            status, _, _ = _http("/tasks/1")
+            status, _, _ = _http("/tasks/1", headers=AUTH_HDR)
             check("GET  /tasks/1", status, 200)
-            status, _, _ = _http("/tasks/99")
+            status, _, _ = _http("/tasks/99", headers=AUTH_HDR)
             check("GET  /tasks/99", status, 404)
 
-            # Override replaces the default stack: its own middleware runs...
+            # --- opted-out routes --------------------------------------------
+            status, hdrs, _ = _http("/healthz")
+            check("GET  /healthz (no credentials)", status, 200)
+            # Default stack dropped via NoMiddleware() -> no request id.
+            check("     /healthz is bare", "X-Request-Id" in hdrs, False)
+
+            # NoAuth plus an overridden stack: its own middleware runs...
             status, hdrs, _ = _http("/webhook", "POST", b"{}", JSON_HDR)
             check("POST /webhook (no signature)", status, 401)
             # ...and the defaults do not.
             check("     /webhook drops defaults", "X-Request-Id" in hdrs, False)
 
             status, _, _ = _http("/webhook", "POST", b"{}", {**JSON_HDR, "X-Signature": "sig"})
-            check("POST /webhook (signed)", status, 200)
+            check("POST /webhook (signed, no credentials)", status, 200)
 
             status, hdrs, _ = _http("/version")
             check("GET  /version (escape hatch)", status, 200)
