@@ -25,6 +25,14 @@ type AppConfig struct {
 	// Handlers are the endpoints to register, in order.
 	Handlers []Endpoint
 
+	// Middleware is the default stack applied to every endpoint, outermost
+	// first. An endpoint inherits it unless its own Middleware field extends or
+	// overrides it — see [MiddlewareStack].
+	//
+	// It applies to endpoints only. Routes registered straight on [App.Mux] are
+	// outside the framework and get no middleware from it.
+	Middleware []Middleware
+
 	// Address is the TCP listen address, e.g. ":8080". Defaults to
 	// [DefaultAddress] when empty.
 	Address string
@@ -81,7 +89,7 @@ func NewApp(cfg AppConfig) (*App, error) {
 		}
 		seen[p] = struct{}{}
 
-		app.mux.Handle(p, e.wrapped())
+		app.mux.Handle(p, e.wrapped(cfg.Middleware))
 		app.endpoints = append(app.endpoints, e)
 	}
 

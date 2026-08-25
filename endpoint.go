@@ -2,11 +2,6 @@ package vov
 
 import "net/http"
 
-// Middleware wraps an http.Handler, following the standard net/http idiom. It is
-// declared as data on an [Endpoint] rather than pre-applied to the handler, so
-// that what wraps a route stays readable off the declaration.
-type Middleware func(http.Handler) http.Handler
-
 // Endpoint is the declarative unit of the framework: a handler with the standard
 // net/http signature, plus the method, path, and middleware that describe how it
 // is served — all as plain data. It is deliberately a value type with no methods
@@ -25,9 +20,11 @@ type Endpoint struct {
 	// later phase introduces an error-returning handler type.
 	Handler http.HandlerFunc
 
-	// Middleware wraps Handler, outermost first: with [A, B] the request flows
-	// A -> B -> Handler.
-	Middleware []Middleware
+	// Middleware declares this endpoint's middleware relative to the app-wide
+	// default stack ([AppConfig.Middleware]). The zero value inherits that stack;
+	// [ExtendMiddleware] adds to it, [OverrideMiddleware] replaces it, and
+	// [NoMiddleware] runs the handler bare.
+	Middleware MiddlewareStack
 }
 
 // pattern returns the ServeMux pattern for the endpoint: "METHOD /path" when a
@@ -39,11 +36,8 @@ func (e Endpoint) pattern() string {
 	return e.Method + " " + e.Path
 }
 
-// wrapped returns Handler with its middleware applied, outermost first.
-func (e Endpoint) wrapped() http.Handler {
-	var h http.Handler = e.Handler
-	for i := len(e.Middleware) - 1; i >= 0; i-- {
-		h = e.Middleware[i](h)
-	}
-	return h
+// wrapped returns Handler with its effective middleware applied, outermost
+// first, resolved against the app-wide default stack.
+func (e Endpoint) wrapped(defaults []Middleware) http.Handler {
+	return apply(e.Handler, e.Middleware.resolve(defaults))
 }

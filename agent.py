@@ -70,13 +70,17 @@ SMOKE_BASE = f"http://127.0.0.1:{SMOKE_PORT}"
 SMOKE_SHUTDOWN_WAIT = 20  # seconds; must exceed the app's ShutdownTimeout
 
 
-def _http(path: str, method: str = "GET", data: bytes | None = None):
-    req = urllib.request.Request(SMOKE_BASE + path, method=method, data=data)
+JSON_HDR = {"Content-Type": "application/json"}
+
+
+def _http(path: str, method: str = "GET", data: bytes | None = None, headers: dict | None = None):
+    """Return (status, headers, body). 4xx/5xx are results here, not exceptions."""
+    req = urllib.request.Request(SMOKE_BASE + path, method=method, data=data, headers=headers or {})
     try:
         with urllib.request.urlopen(req, timeout=3) as resp:
-            return resp.status, resp.read().decode()
-    except urllib.error.HTTPError as e:  # 4xx/5xx are results here, not errors
-        return e.code, e.read().decode()
+            return resp.status, dict(resp.headers), resp.read().decode()
+    except urllib.error.HTTPError as e:
+        return e.code, dict(e.headers), e.read().decode()
 
 
 def _port_free(port: int) -> bool:
@@ -125,21 +129,55 @@ def smoke() -> int:
                     print(proc.communicate(timeout=5)[0])
                 return 1
 
-            # (label, actual_status, body, want_status)
-            checks = [
-                ("GET  /healthz", *_http("/healthz"), 200),
-                ("POST /tasks", *_http("/tasks", "POST", b'{"title":"write the tests"}'), 201),
-                ("POST /tasks (no title)", *_http("/tasks", "POST", b"{}"), 400),
-                ("GET  /tasks/1", *_http("/tasks/1"), 200),
-                ("GET  /tasks/99", *_http("/tasks/99"), 404),
-                ("GET  /version (escape hatch)", *_http("/version"), 200),
-                ("POST /healthz (wrong method)", *_http("/healthz", "POST", b""), 405),
-            ]
-            for label, status, _body, want in checks:
-                ok = status == want
-                print(f"   {'ok ' if ok else 'BAD'} {label} -> {status} (want {want})")
+            def check(label: str, got, want):
+                ok = got == want
+                print(f"   {'ok ' if ok else 'BAD'} {label}: {got} (want {want})")
                 if not ok:
-                    failures.append(f"{label}: got {status}, want {want}")
+                    failures.append(f"{label}: got {got}, want {want}")
+
+            # Routing and handler behavior.
+            status, hdrs, _ = _http("/healthz")
+            check("GET  /healthz", status, 200)
+            # Default stack dropped via NoMiddleware() -> no request id.
+            check("     /healthz is bare", "X-Request-Id" in hdrs, False)
+
+            status, hdrs, _ = _http("/tasks", "POST", b'{"title":"write the tests"}', JSON_HDR)
+            check("POST /tasks", status, 201)
+            # Extend keeps the default stack, so the request id is still stamped.
+            check("     /tasks POST keeps defaults", "X-Request-Id" in hdrs, True)
+
+            status, _, _ = _http("/tasks", "POST", b"{}", JSON_HDR)
+            check("POST /tasks (no title)", status, 400)
+
+            # The extra middleware layer this endpoint added on top of the defaults.
+            status, _, _ = _http("/tasks", "POST", b"nope", {"Content-Type": "text/plain"})
+            check("POST /tasks (not JSON)", status, 415)
+
+            status, hdrs, _ = _http("/tasks")
+            check("GET  /tasks", status, 200)
+            # Field unset -> inherits the default stack.
+            check("     /tasks inherits defaults", "X-Request-Id" in hdrs, True)
+
+            status, _, _ = _http("/tasks/1")
+            check("GET  /tasks/1", status, 200)
+            status, _, _ = _http("/tasks/99")
+            check("GET  /tasks/99", status, 404)
+
+            # Override replaces the default stack: its own middleware runs...
+            status, hdrs, _ = _http("/webhook", "POST", b"{}", JSON_HDR)
+            check("POST /webhook (no signature)", status, 401)
+            # ...and the defaults do not.
+            check("     /webhook drops defaults", "X-Request-Id" in hdrs, False)
+
+            status, _, _ = _http("/webhook", "POST", b"{}", {**JSON_HDR, "X-Signature": "sig"})
+            check("POST /webhook (signed)", status, 200)
+
+            status, hdrs, _ = _http("/version")
+            check("GET  /version (escape hatch)", status, 200)
+            check("     /version has no middleware", "X-Request-Id" in hdrs, False)
+
+            status, _, _ = _http("/healthz", "POST", b"")
+            check("POST /healthz (wrong method)", status, 405)
 
             # Graceful shutdown: SIGTERM should drain, run the hook, and exit 0.
             proc.send_signal(signal.SIGTERM)

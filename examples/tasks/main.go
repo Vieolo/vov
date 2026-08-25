@@ -1,8 +1,8 @@
 // Command tasks is a small example service built with the vov framework. It
-// exists to exercise vov's ergonomics from the outside: declarative endpoints,
-// middleware declared as data, the mux escape hatch, a cleanup hook, and a
-// lifecycle-managed Run. It keeps its data in memory and depends only on the
-// standard library plus vov.
+// exists to exercise vov's ergonomics from the outside: declarative endpoints, a
+// default middleware stack that endpoints inherit, extend, override, or drop, the
+// mux escape hatch, a cleanup hook, and a lifecycle-managed Run. It keeps its data
+// in memory and depends only on the standard library plus vov.
 package main
 
 import (
@@ -31,14 +31,27 @@ func main() {
 			ReadHeaderTimeout: vov.Ptr(5 * time.Second),
 			IdleTimeout:       vov.Ptr(90 * time.Second),
 		},
+		// The default stack, applied to every endpoint that does not say
+		// otherwise. Outermost first: requestID wraps logging wraps the handler.
+		Middleware: []vov.Middleware{requestID, logging},
 		Handlers: []vov.Endpoint{
-			// Public, no middleware.
-			{Method: http.MethodGet, Path: "/healthz", Handler: healthz},
+			// Bare: no default stack, no additions. A health check should not
+			// depend on any of it.
+			{Method: http.MethodGet, Path: "/healthz", Handler: healthz,
+				Middleware: vov.NoMiddleware()},
 
-			// The task API. Each carries the logging middleware as data.
-			{Method: http.MethodGet, Path: "/tasks", Handler: store.list, Middleware: []vov.Middleware{logging}},
-			{Method: http.MethodPost, Path: "/tasks", Handler: store.create, Middleware: []vov.Middleware{logging}},
-			{Method: http.MethodGet, Path: "/tasks/{id}", Handler: store.get, Middleware: []vov.Middleware{logging}},
+			// Inherit the default stack — the common case, so the field is unset.
+			{Method: http.MethodGet, Path: "/tasks", Handler: store.list},
+			{Method: http.MethodGet, Path: "/tasks/{id}", Handler: store.get},
+
+			// Extend: the default stack, plus one more layer inside it.
+			{Method: http.MethodPost, Path: "/tasks", Handler: store.create,
+				Middleware: vov.ExtendMiddleware(requireJSON)},
+
+			// Override: a completely different stack. This route is authenticated
+			// by signature, not by the session the default stack would assume.
+			{Method: http.MethodPost, Path: "/webhook", Handler: webhook,
+				Middleware: vov.OverrideMiddleware(verifySignature)},
 		},
 	})
 	if err != nil {
@@ -46,7 +59,8 @@ func main() {
 	}
 
 	// Escape hatch: register straight on the underlying mux, bypassing vov.
-	// Useful for anything vov does not model yet.
+	// Useful for anything vov does not model yet. Note that these routes get no
+	// middleware from the framework — not even the default stack.
 	app.Mux().HandleFunc("GET /version", func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]string{"version": "0.1.0"})
 	})
@@ -138,19 +152,71 @@ func (s *taskStore) get(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, t)
 }
 
-// --- plumbing ---------------------------------------------------------------
-
 func healthz(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
 
-// logging is an example Middleware: it records method, path, and latency.
+func webhook(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, http.StatusOK, map[string]string{"received": "ok"})
+}
+
+// --- middleware -------------------------------------------------------------
+
+// requestID stamps every response with an id. Part of the default stack, so its
+// presence in a response is evidence that stack ran.
+func requestID(next http.Handler) http.Handler {
+	var n atomicCounter
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("X-Request-Id", strconv.FormatUint(n.next(), 10))
+		next.ServeHTTP(w, r)
+	})
+}
+
+// logging records method, path, and latency. Part of the default stack.
 func logging(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		start := time.Now()
 		next.ServeHTTP(w, r)
 		log.Printf("%s %s (%s)", r.Method, r.URL.Path, time.Since(start))
 	})
+}
+
+// requireJSON rejects a body that is not declared as JSON. Added to one endpoint
+// on top of the default stack.
+func requireJSON(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if ct := r.Header.Get("Content-Type"); ct != "" && ct != "application/json" {
+			writeJSON(w, http.StatusUnsupportedMediaType, map[string]string{"error": "expected application/json"})
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
+// verifySignature stands in for a real webhook signature check. It replaces the
+// default stack rather than adding to it.
+func verifySignature(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("X-Signature") == "" {
+			writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "missing signature"})
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
+// --- plumbing ---------------------------------------------------------------
+
+type atomicCounter struct {
+	mu sync.Mutex
+	n  uint64
+}
+
+func (c *atomicCounter) next() uint64 {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.n++
+	return c.n
 }
 
 func writeJSON(w http.ResponseWriter, status int, v any) {

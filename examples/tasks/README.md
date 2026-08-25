@@ -9,9 +9,20 @@ directive in `go.mod`).
 
 - **Declarative endpoints** — method, path, handler, and middleware are given as
   data in `vov.AppConfig.Handlers`, not assembled imperatively.
-- **Middleware as data** — the `logging` middleware is attached per endpoint.
+- **A default middleware stack** — `AppConfig.Middleware` (`requestID`, `logging`)
+  applies to every endpoint, and each route says how it relates to it:
+
+  | Route | Declaration | Effective stack |
+  |---|---|---|
+  | `GET /tasks` | *(unset)* | `requestID`, `logging` |
+  | `POST /tasks` | `vov.ExtendMiddleware(requireJSON)` | `requestID`, `logging`, `requireJSON` |
+  | `POST /webhook` | `vov.OverrideMiddleware(verifySignature)` | `verifySignature` |
+  | `GET /healthz` | `vov.NoMiddleware()` | *(none)* |
+
+  The default stack stamps `X-Request-Id`, so which routes it reached is visible
+  in the response headers.
 - **The escape hatch** — `GET /version` is registered straight on the underlying
-  mux via `app.Mux()`, bypassing vov.
+  mux via `app.Mux()`, bypassing vov (and so getting no middleware at all).
 - **Server tuning** — a `vov.Server` (the `http.Server` knobs minus `Addr`/`Handler`)
   is supplied through `AppConfig.Server`; defaulted timeouts are pointers, set inline
   with `vov.Ptr`.
@@ -27,11 +38,13 @@ go run .
 Then, in another terminal:
 
 ```bash
-curl -s localhost:8080/healthz
-curl -s -X POST localhost:8080/tasks -d '{"title":"write the tests"}'
-curl -s localhost:8080/tasks
-curl -s localhost:8080/tasks/1
-curl -s localhost:8080/version   # served via the mux escape hatch
+curl -si localhost:8080/healthz | grep -i x-request-id   # bare: no id
+curl -si localhost:8080/tasks | grep -i x-request-id     # inherited: id present
+curl -s -X POST localhost:8080/tasks -H 'Content-Type: application/json' -d '{"title":"write the tests"}'
+curl -s -X POST localhost:8080/tasks -H 'Content-Type: text/plain' -d 'nope'   # 415, added layer
+curl -s -X POST localhost:8080/webhook                   # 401, overridden stack
+curl -s -X POST localhost:8080/webhook -H 'X-Signature: sig'
+curl -s localhost:8080/version                           # via the mux escape hatch
 ```
 
 Press Ctrl-C to trigger graceful shutdown.
