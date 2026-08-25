@@ -1,0 +1,42 @@
+name: vov
+description: Battery-included declarative Go backend framework
+version: 0.0.1
+schema_version: 0
+repository: https://github.com/vieolo/vov
+issue_tracker: https://github.com/vieolo/vov/issues
+license: "MIT"
+external:
+  gomore:
+    commands:
+    # build: go build main.go
+    # test: go test
+  contour:
+    # the central store profiles whose rules load eagerly here.
+    # List more than one to combine entry points — [python, cli] for a Python
+    # project that also ships a CLI. They compose in order, and an item both
+    # profiles select is loaded once. A bare name works too: bootstrap: python
+    # The --bootstrap flag to `contour mcp` overrides this.
+    bootstrap: ['go']
+    # files loaded eagerly as project rules, paths relative to the project
+    # root. Keep a CLAUDE.md or AGENTS.md without moving it into rules/.
+    eager_files: []
+
+# authors:
+#   - name: Jane Doe
+#     email: jane@example.com
+#     organization: Example Org
+#     url: https://example.com
+#   - name: John Smith
+
+# executables:
+#   admin:
+#     entrypoint: ./cmd/admin
+#   server:
+#     entrypoint: ./cmd/server
+#     description: HTTP API server.
+
+# external:
+#   mytool:
+#     enabled: true
+#     paths:
+#       - ./cmd
