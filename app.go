@@ -18,11 +18,10 @@ const DefaultAddress = ":8080"
 // and cleanup hooks to finish before giving up.
 const DefaultShutdownTimeout = 15 * time.Second
 
-// AppConfig is the declarative input to [NewApp].
+// AppConfig is the declarative input to [NewApp]. Apart from Handlers, its fields
+// are the app-wide operational preferences; more are added here as they are
+// needed rather than imagined up front.
 type AppConfig struct {
-	// Metadata describes the project. Optional but recommended.
-	Metadata Metadata
-
 	// Handlers are the endpoints to register, in order.
 	Handlers []Endpoint
 
@@ -33,35 +32,39 @@ type AppConfig struct {
 	// ShutdownTimeout bounds graceful shutdown. Defaults to
 	// [DefaultShutdownTimeout] when zero.
 	ShutdownTimeout time.Duration
+
+	// Server optionally tunes the http.Server vov serves with — timeouts, TLS,
+	// connection hooks, byte limits, and so on. It mirrors http.Server but drops
+	// Addr and Handler, which vov owns (one place for each, no conflicting
+	// values). Its defaulted timeout fields are pointers: a nil field takes vov's
+	// default, an explicit value — including 0, meaning "no timeout" — is honored.
+	// Nil means all defaults. See [Server].
+	Server *Server
 }
 
-// App assembles a set of [Endpoint] declarations onto a standard http.ServeMux
-// and owns the server lifecycle. Construct it with [NewApp].
+// App assembles a set of [Endpoint] declarations onto a standard http.ServeMux,
+// holds the http.Server it will serve with, and owns the server lifecycle.
+// Construct it with [NewApp].
 type App struct {
-	meta            Metadata
 	mux             *http.ServeMux
+	server          *http.Server
 	endpoints       []Endpoint
-	addr            string
 	shutdownTimeout time.Duration
 
 	mu         sync.Mutex
 	onShutdown []func(context.Context) error
 }
 
-// NewApp validates the configuration, builds a mux, and registers every handler
-// on it. It fails closed: an endpoint with an empty path, a nil handler, or a
-// route that duplicates an earlier one is a construction error, not a boot-time
-// surprise. (Genuinely conflicting — but non-identical — mux patterns are still
-// reported by the underlying http.ServeMux.)
+// NewApp validates the configuration, builds a mux, registers every handler on
+// it, and resolves the http.Server to serve with. It fails closed: an endpoint
+// with an empty path, a nil handler, or a route that duplicates an earlier one is
+// a construction error, not a boot-time surprise. (Genuinely conflicting — but
+// non-identical — mux patterns are still reported by the underlying
+// http.ServeMux.)
 func NewApp(cfg AppConfig) (*App, error) {
 	app := &App{
-		meta:            cfg.Metadata,
 		mux:             http.NewServeMux(),
-		addr:            cfg.Address,
 		shutdownTimeout: cfg.ShutdownTimeout,
-	}
-	if app.addr == "" {
-		app.addr = DefaultAddress
 	}
 	if app.shutdownTimeout == 0 {
 		app.shutdownTimeout = DefaultShutdownTimeout
@@ -81,6 +84,14 @@ func NewApp(cfg AppConfig) (*App, error) {
 		app.mux.Handle(p, e.wrapped())
 		app.endpoints = append(app.endpoints, e)
 	}
+
+	// Resolve the listen address, then materialize the http.Server vov serves
+	// with. A nil cfg.Server is fine: ToNetHTTPServer treats it as all-defaults.
+	addr := cfg.Address
+	if addr == "" {
+		addr = DefaultAddress
+	}
+	app.server = cfg.Server.ToNetHTTPServer(addr, app.mux)
 
 	return app, nil
 }
@@ -132,10 +143,7 @@ func (a *App) Run() error {
 // gracefully. It is separated from Run so the lifecycle can be driven by an
 // arbitrary context in tests.
 func (a *App) run(ctx context.Context) error {
-	srv := &http.Server{
-		Addr:    a.addr,
-		Handler: a.mux,
-	}
+	srv := a.server
 
 	serveErr := make(chan error, 1)
 	go func() {
