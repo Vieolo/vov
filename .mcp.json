@@ -1,0 +1,10 @@
+{
+  "mcpServers": {
+    "contour": {
+      "command": "/opt/homebrew/bin/contour",
+      "args": [
+        "mcp"
+      ]
+    }
+  }
+}
