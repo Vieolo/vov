@@ -22,12 +22,15 @@ func main() {
 	store := newTaskStore()
 
 	app, err := vov.NewApp(vov.AppConfig{
-		Metadata: vov.Metadata{
-			Name:        "tasks",
-			Description: "A tiny task list, built to demo vov.",
-			Version:     "0.1.0",
-		},
 		Address: ":8080",
+		// Tune the underlying server with a vov.Server: the http.Server knobs
+		// minus Addr and Handler (vov owns those). Defaulted timeouts are
+		// pointers — leave one nil to take vov's default, or set it inline with
+		// vov.Ptr (even to 0, meaning "no timeout"). Other fields pass through.
+		Server: &vov.Server{
+			ReadHeaderTimeout: vov.Ptr(5 * time.Second),
+			IdleTimeout:       vov.Ptr(90 * time.Second),
+		},
 		Handlers: []vov.Endpoint{
 			// Public, no middleware.
 			{Method: http.MethodGet, Path: "/healthz", Handler: healthz},

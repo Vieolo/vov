@@ -12,6 +12,9 @@ directive in `go.mod`).
 - **Middleware as data** — the `logging` middleware is attached per endpoint.
 - **The escape hatch** — `GET /version` is registered straight on the underlying
   mux via `app.Mux()`, bypassing vov.
+- **Server tuning** — a `vov.Server` (the `http.Server` knobs minus `Addr`/`Handler`)
+  is supplied through `AppConfig.Server`; defaulted timeouts are pointers, set inline
+  with `vov.Ptr`.
 - **Lifecycle** — `app.Run()` serves until SIGINT/SIGTERM, then drains and runs
   the `OnShutdown` cleanup hook.
 
