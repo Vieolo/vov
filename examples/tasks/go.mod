@@ -1,6 +1,6 @@
 module github.com/vieolo/vov/examples/tasks
 
-go 1.26.5
+go 1.27
 
 require github.com/vieolo/vov v0.0.0
 
