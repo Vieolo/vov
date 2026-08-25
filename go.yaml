@@ -8,8 +8,8 @@ license: "MIT"
 external:
   gomore:
     commands:
-    # build: go build main.go
-    # test: go test
+      # Deterministic build + vet + test across every module (see agent.py).
+      verify: python3 agent.py verify
   contour:
     # the central store profiles whose rules load eagerly here.
     # List more than one to combine entry points — [python, cli] for a Python
