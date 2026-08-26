@@ -2,13 +2,16 @@
 """Deterministic verification for the vov framework and its examples.
 
 Usage:
-    python3 agent.py verify   # build, vet, and test every module
-    python3 agent.py smoke    # run the example end-to-end (routes + shutdown)
+    python3 agent.py verify    # build, vet, test, and gofmt every module
+    python3 agent.py smoke     # run the example end-to-end (routes + shutdown)
+    python3 agent.py manifest  # check the checked-in route manifest is current
+    python3 agent.py manifest --write   # regenerate it after a deliberate change
 
 Per the repo rules, run this instead of re-running the go/curl commands by hand.
 Each module is checked independently because `go ... ./...` never crosses a
 module boundary, so a break in one module stays invisible to the others.
 """
+import difflib
 import json
 import os
 import shutil
@@ -319,6 +322,56 @@ def smoke() -> int:
     return 0
 
 
+# --- manifest ---------------------------------------------------------------
+
+MANIFEST_PATH = ROOT / "examples" / "tasks" / "routes.txt"
+
+
+def manifest(write: bool = False) -> int:
+    """Compare the example's live route manifest with the checked-in file.
+
+    This is the point of the manifest: a policy that is quietly loosened still
+    passes every test, because the tests assert against the declaration that
+    changed. It only shows up as a diff here.
+    """
+    example = ROOT / "examples" / "tasks"
+    done = subprocess.run(
+        ["go", "run", ".", "-manifest"],
+        cwd=example, env=SMOKE_ENV, capture_output=True, text=True, timeout=120,
+    )
+    if done.returncode != 0:
+        print("MANIFEST FAILED: could not render the manifest")
+        print(done.stdout + done.stderr)
+        return 1
+    current = done.stdout
+
+    if write:
+        MANIFEST_PATH.write_text(current)
+        print(f"MANIFEST WRITTEN: {MANIFEST_PATH.relative_to(ROOT)}")
+        return 0
+
+    if not MANIFEST_PATH.exists():
+        print(f"MANIFEST FAILED: {MANIFEST_PATH.relative_to(ROOT)} does not exist "
+              f"(run: python3 agent.py manifest --write)")
+        return 1
+
+    checked_in = MANIFEST_PATH.read_text()
+    if checked_in == current:
+        print(f"   ok  route manifest matches {MANIFEST_PATH.relative_to(ROOT)}")
+        print("\nMANIFEST PASSED")
+        return 0
+
+    print(f"MANIFEST FAILED: routes changed but {MANIFEST_PATH.relative_to(ROOT)} was not updated.")
+    print("Review this diff — a loosened policy looks exactly like any other line.\n")
+    diff = difflib.unified_diff(
+        checked_in.splitlines(keepends=True), current.splitlines(keepends=True),
+        fromfile="routes.txt (checked in)", tofile="routes.txt (current code)",
+    )
+    print("".join(diff))
+    print("If the change is intended: python3 agent.py manifest --write")
+    return 1
+
+
 # --- entry ------------------------------------------------------------------
 
 def main() -> int:
@@ -328,7 +381,11 @@ def main() -> int:
         return verify()
     if cmd == "smoke":
         return smoke()
-    print(f"unknown command: {cmd!r}; supported: verify, smoke", file=sys.stderr)
+    if cmd == "manifest":
+        return manifest(write="--write" in args[1:])
+    if cmd == "all":
+        return verify() or manifest() or smoke()
+    print(f"unknown command: {cmd!r}; supported: verify, smoke, manifest, all", file=sys.stderr)
     return 2
 
 

@@ -1,0 +1,14 @@
+# vov route manifest — every endpoint this app declares, and who may reach it.
+# Regenerate whenever a route declaration changes; review the diff.
+#
+#   METHOD  PATH  auth:<mode>  stack:<name>  [roles-any:a|b]  [perms-all:x,y]
+#
+# roles-any  is satisfied by ANY one of the listed roles       (| reads as "or")
+# perms-all  requires EVERY one of the listed permissions      (, reads as "and")
+
+GET     /healthz                       auth:none  stack:bare
+GET     /tasks                         auth:required  stack:default
+POST    /tasks                         auth:required  stack:json  perms-all:tasks.write
+GET     /tasks/{id}                    auth:required  stack:default
+DELETE  /tasks/{id}                    auth:required  stack:default  roles-any:admin|owner  perms-all:tasks.write
+POST    /webhook                       auth:none  stack:webhook

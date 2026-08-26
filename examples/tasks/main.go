@@ -13,8 +13,11 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"flag"
+	"fmt"
 	"log"
 	"net/http"
+	"os"
 	"slices"
 	"strconv"
 	"strings"
@@ -38,6 +41,11 @@ type config struct {
 }
 
 func main() {
+	// -manifest prints the route manifest and exits, so CI can diff it against
+	// the checked-in routes.txt without starting a server.
+	printManifest := flag.Bool("manifest", false, "print the route manifest and exit")
+	flag.Parse()
+
 	// Load the environment first: everything below is built from it, which is
 	// why this is a plain function and not a field of vov.AppConfig.
 	var cfg config
@@ -99,6 +107,11 @@ func main() {
 	})
 	if err != nil {
 		log.Fatalf("tasks: %v", err)
+	}
+
+	if *printManifest {
+		fmt.Print(app.Manifest())
+		os.Exit(0)
 	}
 
 	// Escape hatch: register straight on the underlying mux, bypassing vov.

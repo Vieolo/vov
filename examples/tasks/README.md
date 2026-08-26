@@ -96,6 +96,19 @@ directive in `go.mod`).
 - **Lifecycle** — `app.Run()` serves until SIGINT/SIGTERM, then drains and runs
   the `OnShutdown` cleanup hook.
 
+- **A checked-in route manifest** — [`routes.txt`](routes.txt) is `app.Manifest()`
+  rendered to a file, regenerated with `go run . -manifest`:
+
+  ```
+  GET     /tasks/{id}    auth:required  stack:default
+  DELETE  /tasks/{id}    auth:required  stack:default  roles-any:admin|owner  perms-all:tasks.write
+  ```
+
+  `python3 agent.py manifest` fails if the code and the file disagree. That is
+  the whole point: make `GET /tasks/{id}` public and `verify` and `smoke` both
+  stay green, because no test asserts a property nobody thought to assert — but
+  the manifest shows a changed line.
+
 ## Run it
 
 `TASKS_TOKEN` is required — without it the server refuses to start and says so:
