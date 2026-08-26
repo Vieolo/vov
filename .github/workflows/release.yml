@@ -1,0 +1,33 @@
+name: Create Release
+on:
+  push:
+    tags:
+      - '*'
+
+jobs:
+  create_release:
+    name: Create Release
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v2
+        
+      - name: Read Changelog
+        id: changelog
+        run: |
+          tag_name=$(git describe --tags --abbrev=0)
+          release_notes=$(sed -n '/## '"$tag_name"'/,/## v/{/## v/!p;}' changelog.md)
+          echo "${release_notes}" > ${{ runner.temp }}/release_notes.txt
+          
+      - name: Create Release
+        id: create_release
+        uses: actions/create-release@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tag_name: ${{ github.ref }}
+          release_name: ${{ github.ref }}
+          body_path: ${{ runner.temp }}/release_notes.txt
+          draft: false
+          prerelease: false
