@@ -15,6 +15,7 @@ import (
 	"errors"
 	"log"
 	"net/http"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -130,13 +131,27 @@ func (c config) redacted() config {
 
 // --- auth -------------------------------------------------------------------
 
-// user is this app's own model. It satisfies vov.User by answering the one
-// question vov asks; everything else about it stays the app's business.
+// user is this app's own model. It satisfies vov.User by answering the three
+// questions vov asks; everything else about it stays the app's business.
+//
+// Roles and permissions are resolved once, when the user is built, and answered
+// from memory — so an endpoint requiring two permissions does not become two
+// lookups. In a real service this is where the session query would put them.
 type user struct {
-	name string
+	name  string
+	roles []string
+	perms []string
 }
 
 func (u *user) IsAuthenticated() bool { return u != nil && u.name != "" }
+
+func (u *user) HasRole(role string) bool {
+	return u != nil && slices.Contains(u.roles, role)
+}
+
+func (u *user) HasPermission(perm string) bool {
+	return u != nil && slices.Contains(u.perms, perm)
+}
 
 // makeAuthenticator builds the app's vov.Authenticator around the token from the
 // environment. It owns the credential lookup, which in a real service would hit
@@ -150,7 +165,13 @@ func makeAuthenticator(valid string) vov.Authenticator {
 		case token == "t-boom":
 			return nil, errors.New("session store unavailable") // -> 500, not 401
 		case token == valid:
-			return &user{name: "ramtin"}, nil
+			// An ordinary member: may write tasks, but is not an admin.
+			return &user{name: "ramtin", roles: []string{"member"}, perms: []string{"tasks.write"}}, nil
+		case token == valid+"-admin":
+			return &user{name: "admin", roles: []string{"member", "admin"}, perms: []string{"tasks.write"}}, nil
+		case token == valid+"-reader":
+			// Authenticated, but holds no write permission: 403, never 401.
+			return &user{name: "reader", roles: []string{"member"}}, nil
 		default:
 			return nil, nil
 		}

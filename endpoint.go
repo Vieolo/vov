@@ -34,7 +34,7 @@ type Endpoint struct {
 // without a handler counts as declared, so that [NewApp] can reject it rather
 // than silently dropping a method someone meant to serve.
 func (e Endpoint) declared() bool {
-	return e.Handler != nil || e.MiddlewareStack != "" || e.AuthMod != AuthMod{}
+	return e.Handler != nil || e.MiddlewareStack != "" || !e.AuthMod.isZero()
 }
 
 // wrapped builds the endpoint's request chain from its stack, outside in:
@@ -49,7 +49,7 @@ func (e Endpoint) wrapped(s MiddlewareStack, auth Authenticator) http.Handler {
 	var h http.Handler = e.Handler
 	if e.AuthMod.required() {
 		h = apply(h, s.Post)
-		h = authGuard(h, auth)
+		h = authGuard(h, auth, e.AuthMod)
 	}
 	return apply(h, s.Pre)
 }

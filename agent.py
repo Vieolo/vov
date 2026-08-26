@@ -83,8 +83,10 @@ SMOKE_SHUTDOWN_WAIT = 20  # seconds; must exceed the app's ShutdownTimeout
 
 
 JSON_HDR = {"Content-Type": "application/json"}
-AUTH_HDR = {"Authorization": "Bearer t-ramtin"}
-BOOM_HDR = {"Authorization": "Bearer t-boom"}  # makes the authenticator fail
+AUTH_HDR = {"Authorization": "Bearer t-ramtin"}          # member + tasks.write
+ADMIN_HDR = {"Authorization": "Bearer t-ramtin-admin"}   # also role admin
+READER_HDR = {"Authorization": "Bearer t-ramtin-reader"} # member, no tasks.write
+BOOM_HDR = {"Authorization": "Bearer t-boom"}            # authenticator fails
 JSON_AUTH = {**JSON_HDR, **AUTH_HDR}
 
 # The example reads these at startup; TASKS_TOKEN is declared required.
@@ -216,13 +218,25 @@ def smoke() -> int:
             status, _, _ = _http("/tasks/99", headers=AUTH_HDR)
             check("GET  /tasks/99", status, 404)
 
+            # --- roles and permissions ---------------------------------------
+            # Authenticated but lacking tasks.write: known, and still refused.
+            status, _, _ = _http("/tasks", "POST", b'{"title":"nope"}',
+                                 {**JSON_HDR, **READER_HDR})
+            check("POST /tasks (no permission)", status, 403)
+            # DELETE /tasks/{id} needs role admin; a plain member does not have it.
+            status, _, _ = _http("/tasks/1", "DELETE", headers=AUTH_HDR)
+            check("DEL  /tasks/1 (not an admin)", status, 403)
+            # ...but GET on the same URL only needs authentication.
+            status, _, _ = _http("/tasks/1", headers=AUTH_HDR)
+            check("GET  /tasks/1 (same URL, no role needed)", status, 200)
+
             # --- one URL, several methods ------------------------------------
             # /tasks/{id} declares GET and DELETE in a single Route.
-            status, _, _ = _http("/tasks/1", "DELETE", headers=AUTH_HDR)
-            check("DEL  /tasks/1", status, 204)
+            status, _, _ = _http("/tasks/1", "DELETE", headers=ADMIN_HDR)
+            check("DEL  /tasks/1 (admin)", status, 204)
             status, _, _ = _http("/tasks/1", headers=AUTH_HDR)
             check("GET  /tasks/1 (after delete)", status, 404)
-            # DELETE is protected too: each method carries its own auth.
+            # Unauthenticated is 401, not 403: vov does not know who you are.
             status, _, _ = _http("/tasks/2", "DELETE")
             check("DEL  /tasks/2 (no credentials)", status, 401)
             # A method the Route does not declare: net/http derives 405 + Allow

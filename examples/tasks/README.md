@@ -51,9 +51,24 @@ directive in `go.mod`).
 
   Naming a stack that was never declared is a construction error, not a route
   that quietly ends up wrapped in nothing.
-- **Auth on by default** — `AppConfig.Authenticator` resolves the user; every
-  endpoint requires one unless it declares `vov.NoAuth()`. `/tasks` says nothing
-  about auth and is protected anyway; `/healthz` and `/webhook` opt out.
+- **Auth on by default, authority per method** — `AppConfig.Authenticator`
+  resolves the user; every endpoint requires one unless it declares
+  `vov.NoAuth()`. `/tasks` says nothing about auth and is protected anyway;
+  `/healthz` and `/webhook` opt out. On top of that, an endpoint can demand more:
+
+  | Endpoint | `AuthMod` | Who gets through |
+  |---|---|---|
+  | `GET /tasks/{id}` | *(unset)* | any authenticated user |
+  | `POST /tasks` | `vov.AuthPermissions("tasks.write")` | needs **all** listed permissions |
+  | `DELETE /tasks/{id}` | `vov.AuthRoles("admin")` | needs **any** listed role |
+
+  Note that `GET` and `DELETE` on `/tasks/{id}` differ — reading is for everyone,
+  deleting is for admins — which is why auth is configured per method rather than
+  per URL.
+
+  The two refusals mean different things: **401** is "vov does not know who you
+  are", **403** is "it does, and the answer is still no". Neither says which
+  requirement failed.
 - **The auth seam splits every stack** — `Pre` runs outside the guard (so a 401
   is still logged and still carries a request id); `Post` runs inside it, where
   `vov.UserFrom` works — that is how `auditLog` knows who made the request:
@@ -96,6 +111,12 @@ Then, in another terminal (the demo token is whatever you set above):
 curl -s localhost:8080/tasks                             # 401: protected by default
 curl -s localhost:8080/tasks -H 'Authorization: Bearer t-ramtin'
 curl -s localhost:8080/tasks -H 'Authorization: Bearer t-boom'   # 500, not 401
+
+# Three demo users: t-ramtin (member), -admin (also admin), -reader (no write).
+curl -s -X POST localhost:8080/tasks -H 'Authorization: Bearer t-ramtin-reader' \
+  -H 'Content-Type: application/json' -d '{"title":"x"}'  # 403: lacks tasks.write
+curl -s -X DELETE localhost:8080/tasks/1 -H 'Authorization: Bearer t-ramtin'        # 403: not admin
+curl -s -X DELETE localhost:8080/tasks/1 -H 'Authorization: Bearer t-ramtin-admin'  # 204
 curl -s -X POST localhost:8080/tasks -H 'Authorization: Bearer t-ramtin' \
   -H 'Content-Type: application/json' -d '{"title":"write the tests"}'   # owner is set from the context
 curl -s -X POST localhost:8080/tasks -H 'Authorization: Bearer t-ramtin' \
