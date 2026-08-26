@@ -203,7 +203,7 @@ func healthEndpoints(greeting string) vov.Endpoints {
 	return vov.Endpoints{
 		GET: vov.Endpoint{
 			MiddlewareStack: "bare",
-			AuthMod:         vov.NoAuth(),
+			AuthMode:        vov.AuthModeNone,
 			Handler: func(w http.ResponseWriter, r *http.Request) {
 				writeJSON(w, http.StatusOK, map[string]string{"status": greeting})
 			},
@@ -217,7 +217,7 @@ func webhookEndpoints() vov.Endpoints {
 	return vov.Endpoints{
 		POST: vov.Endpoint{
 			MiddlewareStack: "webhook",
-			AuthMod:         vov.NoAuth(),
+			AuthMode:        vov.AuthModeNone,
 			Handler: func(w http.ResponseWriter, r *http.Request) {
 				writeJSON(w, http.StatusOK, map[string]string{"received": "ok"})
 			},

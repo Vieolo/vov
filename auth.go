@@ -45,36 +45,45 @@ type User interface {
 // interface, and vov would call IsAuthenticated on it.
 type Authenticator func(*http.Request) (User, error)
 
-// AuthModMode says whether an endpoint requires an authenticated user. Its zero
-// value requires one, so an [Endpoint] that says nothing about auth is protected
-// — forgetting to declare auth fails closed rather than exposing the route.
-type AuthModMode uint8
+// AuthMode says whether an [Endpoint] needs an authenticated user.
+//
+// The zero value — an endpoint that says nothing — means [AuthModeRequired]. An
+// endpoint is opened only by naming [AuthModeNone], so forgetting to declare
+// auth protects a route rather than exposing it. Everything here is arranged
+// around that: see [AuthMode.required].
+type AuthMode string
 
 const (
-	AuthModModeRequired AuthModMode = iota // an authenticated user is required
-	AuthModModeNone                        // no user is required; the route is open
+	// AuthModeRequired demands an authenticated user. It is also what the zero
+	// value means, so it rarely needs writing.
+	AuthModeRequired AuthMode = "required"
+
+	// AuthModeNone opts out: no user is resolved and none is required. Reach for
+	// it deliberately — it is the visible, greppable token that says a route is
+	// open.
+	AuthModeNone AuthMode = "none"
 )
 
-// AuthMod is an [Endpoint]'s authentication requirement: whether a user must be
-// resolved at all. The zero value requires one; [NoAuth] opts out.
-//
-// What that user must *hold* is declared separately, on [Endpoint.Roles] and
-// [Endpoint.Permissions].
-type AuthMod struct {
-	mode AuthModMode
-}
-
-// NoAuth exempts an endpoint from the app's authentication requirement: no user
-// is resolved and none is required. Reach for it deliberately — a route that
-// says nothing is protected by default, and this is the visible, greppable token
-// that says otherwise.
-func NoAuth() AuthMod {
-	return AuthMod{mode: AuthModModeNone}
-}
-
 // required reports whether the endpoint needs an authenticated user.
-func (a AuthMod) required() bool {
-	return a.mode == AuthModModeRequired
+//
+// It tests for the opt-out rather than for the opt-in, which is what makes the
+// default safe: the zero value, and anything vov does not recognize, requires
+// authentication. Comparing against AuthModeRequired instead would leave every
+// endpoint that declared nothing wide open.
+func (a AuthMode) required() bool {
+	return a != AuthModeNone
+}
+
+// valid reports whether a is a mode vov knows. AuthMode is a string type, so a
+// typo compiles; an unrecognized mode still fails closed above, but it is a
+// mistake worth naming at construction rather than silently accepting.
+func (a AuthMode) valid() bool {
+	switch a {
+	case "", AuthModeRequired, AuthModeNone:
+		return true
+	default:
+		return false
+	}
 }
 
 // authorized reports whether u satisfies an endpoint's declared requirements.

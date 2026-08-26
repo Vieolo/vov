@@ -114,8 +114,8 @@ func NewApp(cfg AppConfig) (*App, error) {
 			// Fail closed: an endpoint that requires auth with no way to
 			// authenticate is a configuration bug, not one that should quietly
 			// reject everyone.
-			if me.Endpoint.AuthMod.required() && cfg.Authenticator == nil {
-				return nil, fmt.Errorf("vov: route %d (%s): requires auth but AppConfig.Authenticator is nil (declare vov.NoAuth() to make it open)", i, p)
+			if me.Endpoint.AuthMode.required() && cfg.Authenticator == nil {
+				return nil, fmt.Errorf("vov: route %d (%s): requires auth but AppConfig.Authenticator is nil (declare vov.AuthModeNone to make it open)", i, p)
 			}
 			if err := validateAuth(me.Endpoint); err != nil {
 				return nil, fmt.Errorf("vov: route %d (%s): %w", i, p, err)
@@ -154,10 +154,14 @@ func validateRoutePath(r Route) error {
 
 // validateAuth rejects declarations that cannot mean what they say.
 func validateAuth(e Endpoint) error {
+	if !e.AuthMode.valid() {
+		return fmt.Errorf("unknown AuthMode %q (use %q, %q, or leave it unset for %q)",
+			string(e.AuthMode), AuthModeRequired, AuthModeNone, AuthModeRequired)
+	}
 	// Roles and permissions are checked against a user, and an open endpoint
 	// never resolves one — so these would silently not be enforced.
-	if !e.AuthMod.required() && e.constrained() {
-		return errors.New("declares Roles or Permissions but also vov.NoAuth(), which resolves no user to check them against")
+	if !e.AuthMode.required() && e.constrained() {
+		return errors.New("declares RolesAnyOf or PermissionsAllOf but also vov.AuthModeNone, which resolves no user to check them against")
 	}
 	for _, r := range e.RolesAnyOf {
 		if r == "" {

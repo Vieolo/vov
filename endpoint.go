@@ -27,7 +27,7 @@ type Endpoint struct {
 	// value requires an authenticated user, so a method that says nothing is
 	// protected; [NoAuth] opts out. It is per-method on purpose: a URL may be
 	// readable by anyone and writable only by an authenticated user.
-	AuthMod AuthMod
+	AuthMode AuthMode
 
 	// Roles restricts the endpoint to users holding at least one of them —
 	// any-of, because a role is an identity and any of the listed identities
@@ -51,7 +51,7 @@ type Endpoint struct {
 func (e Endpoint) declared() bool {
 	return e.Handler != nil ||
 		e.MiddlewareStack != "" ||
-		e.AuthMod != (AuthMod{}) ||
+		e.AuthMode != "" ||
 		len(e.RolesAnyOf) > 0 ||
 		len(e.PermissionsAllOf) > 0
 }
@@ -72,7 +72,7 @@ func (e Endpoint) constrained() bool {
 // no guard and no user, so its stack's Post half is skipped.
 func (e Endpoint) wrapped(s MiddlewareStack, auth Authenticator) http.Handler {
 	var h http.Handler = e.Handler
-	if e.AuthMod.required() {
+	if e.AuthMode.required() {
 		h = apply(h, s.Post)
 		h = authGuard(h, auth, e.RolesAnyOf, e.PermissionsAllOf)
 	}
