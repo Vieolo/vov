@@ -38,6 +38,7 @@ type config struct {
 	MaxTasks int           `env:"TASKS_MAX" envDefault:"100"`
 	Debug    bool          `env:"TASKS_DEBUG"`
 	Idle     time.Duration `env:"TASKS_IDLE_TIMEOUT" envDefault:"90s"`
+	Bucket   string        `env:"TASKS_BUCKET" envDefault:"tasks-archive"`
 }
 
 func main() {
@@ -56,10 +57,13 @@ func main() {
 		log.Printf("tasks: config %+v", cfg.redacted())
 	}
 
-	store := newTaskStore(cfg.MaxTasks)
+	// Built once, then published to the handlers through the holder in deps.go.
+	deps.Set(newDeps(cfg))
 
 	app, err := vov.NewApp(vov.AppConfig{
-		Address: cfg.Addr,
+		// vov checks the holder was populated and refuses to build if not.
+		RequireDeps: []vov.Readiness{deps},
+		Address:     cfg.Addr,
 		// Tune the underlying server with a vov.Server: the http.Server knobs
 		// minus Addr and Handler (vov owns those). Defaulted timeouts are
 		// pointers — leave one nil to take vov's default, or set it inline with
@@ -100,8 +104,8 @@ func main() {
 		// of the service's URLs rather than a pile of handler references.
 		Routes: []vov.Route{
 			{Path: "/healthz", Endpoints: healthEndpoints(cfg.Greeting)},
-			{Path: "/tasks", Endpoints: store.collectionEndpoints()},
-			{Path: "/tasks/{id}", Endpoints: store.itemEndpoints()},
+			{Path: "/tasks", Endpoints: collectionEndpoints()},
+			{Path: "/tasks/{id}", Endpoints: itemEndpoints()},
 			{Path: "/webhook", Endpoints: webhookEndpoints()},
 		},
 	})
@@ -123,11 +127,12 @@ func main() {
 
 	// Cleanup hook, run during graceful shutdown.
 	app.OnShutdown(func(ctx context.Context) error {
-		log.Printf("tasks: %d task(s) in memory at exit", store.len())
+		d := deps.Get()
+		d.Log.Info("shutting down", "tasks_in_memory", d.Store.len())
 		return nil
 	})
 
-	log.Printf("tasks: listening on :8080")
+	deps.Get().Log.Info("listening", "addr", cfg.Addr)
 	if err := app.Run(); err != nil {
 		log.Fatalf("tasks: %v", err)
 	}
@@ -232,6 +237,7 @@ func webhookEndpoints() vov.Endpoints {
 			MiddlewareStack: "webhook",
 			AuthMode:        vov.AuthModeNone,
 			Handler: func(w http.ResponseWriter, r *http.Request) {
+				deps.Get().Log.Info("webhook received")
 				writeJSON(w, http.StatusOK, map[string]string{"received": "ok"})
 			},
 		},

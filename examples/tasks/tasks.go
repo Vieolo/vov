@@ -1,12 +1,15 @@
 package main
 
-// The task resource: its storage, its handlers, and — at the top — the URLs it
-// serves. Keeping the vov.Endpoints groups here means a URL's method list lives
-// beside the code that implements it, so adding a method is one edit in one
-// file. main.go only has to say which path each group is mounted on.
+// The task resource: the URLs it serves, its handlers, and its storage.
+//
+// Handlers are plain functions with the standard net/http signature. They reach
+// the objects built at boot through the deps holder, so nothing in this file has
+// to be wired to anything else. The vov.Endpoints groups at the top keep a URL's
+// method list beside the code that implements it.
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"sort"
 	"strconv"
@@ -16,15 +19,15 @@ import (
 )
 
 // collectionEndpoints serves /tasks.
-func (s *taskStore) collectionEndpoints() vov.Endpoints {
+func collectionEndpoints() vov.Endpoints {
 	return vov.Endpoints{
 		// Nothing declared, so: default stack, auth required. The majority case
 		// says nothing and is protected anyway.
-		GET: vov.Endpoint{Handler: s.list},
+		GET: vov.Endpoint{Handler: listTasks},
 		// Reading is open to any authenticated user; writing takes a permission.
 		// Same URL, different wrapping and different authority — per method.
 		POST: vov.Endpoint{
-			Handler:          s.create,
+			Handler:          createTask,
 			MiddlewareStack:  "json",
 			PermissionsAllOf: []string{"tasks.write"},
 		},
@@ -32,18 +35,96 @@ func (s *taskStore) collectionEndpoints() vov.Endpoints {
 }
 
 // itemEndpoints serves /tasks/{id}.
-func (s *taskStore) itemEndpoints() vov.Endpoints {
+func itemEndpoints() vov.Endpoints {
 	return vov.Endpoints{
-		GET: vov.Endpoint{Handler: s.get},
+		GET: vov.Endpoint{Handler: getTask},
 		// Deleting needs both: one of the listed roles (any-of) and every listed
 		// permission (all-of). Reading the same URL needs neither — which is the
 		// point of configuring auth per method rather than per URL.
 		DELETE: vov.Endpoint{
-			Handler:          s.delete,
+			Handler:          deleteTask,
 			RolesAnyOf:       []string{"admin", "owner"},
 			PermissionsAllOf: []string{"tasks.write"},
 		},
 	}
+}
+
+// --- handlers ---------------------------------------------------------------
+
+func listTasks(w http.ResponseWriter, r *http.Request) {
+	d := deps.Get()
+	out := d.Store.all()
+	d.Log.Debug("listed tasks", "count", len(out))
+	writeJSON(w, http.StatusOK, out)
+}
+
+func createTask(w http.ResponseWriter, r *http.Request) {
+	d := deps.Get()
+	var in struct {
+		Title string `json:"title"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid JSON body"})
+		return
+	}
+	if in.Title == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "title is required"})
+		return
+	}
+
+	// The endpoint requires auth, so the guard has already run and there is
+	// always a user here.
+	t, err := d.Store.add(in.Title, currentUser(r).name)
+	if err != nil {
+		writeJSON(w, http.StatusInsufficientStorage, map[string]string{"error": err.Error()})
+		return
+	}
+
+	// A second shared dependency, used from the same handler.
+	if _, err := d.S3.PutObject(fmt.Sprintf("tasks/%d.json", t.ID), []byte(t.Title)); err != nil {
+		d.Log.Error("archive failed", "id", t.ID, "err", err)
+	}
+
+	writeJSON(w, http.StatusCreated, t)
+}
+
+func getTask(w http.ResponseWriter, r *http.Request) {
+	d := deps.Get()
+	id, ok := taskID(w, r)
+	if !ok {
+		return
+	}
+	t, found := d.Store.get(id)
+	if !found {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "task not found"})
+		return
+	}
+	writeJSON(w, http.StatusOK, t)
+}
+
+func deleteTask(w http.ResponseWriter, r *http.Request) {
+	d := deps.Get()
+	id, ok := taskID(w, r)
+	if !ok {
+		return
+	}
+	if !d.Store.remove(id) {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "task not found"})
+		return
+	}
+	d.Log.Info("task deleted", "id", id, "by", currentUser(r).name)
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// taskID reads the {id} path value, answering 400 and reporting false when it is
+// not a number.
+func taskID(w http.ResponseWriter, r *http.Request) (int, bool) {
+	id, err := strconv.Atoi(r.PathValue("id"))
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "id must be an integer"})
+		return 0, false
+	}
+	return id, true
 }
 
 // --- storage ----------------------------------------------------------------
@@ -72,80 +153,44 @@ func (s *taskStore) len() int {
 	return len(s.items)
 }
 
-// --- handlers ---------------------------------------------------------------
-
-func (s *taskStore) list(w http.ResponseWriter, r *http.Request) {
+func (s *taskStore) all() []task {
 	s.mu.RLock()
+	defer s.mu.RUnlock()
+
 	out := make([]task, 0, len(s.items))
 	for _, t := range s.items {
 		out = append(out, t)
 	}
-	s.mu.RUnlock()
-
 	sort.Slice(out, func(i, j int) bool { return out[i].ID < out[j].ID })
-	writeJSON(w, http.StatusOK, out)
+	return out
 }
 
-func (s *taskStore) create(w http.ResponseWriter, r *http.Request) {
-	var in struct {
-		Title string `json:"title"`
-	}
-	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid JSON body"})
-		return
-	}
-	if in.Title == "" {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "title is required"})
-		return
-	}
-
-	// The endpoint requires auth, so the guard has already run and there is
-	// always a user here.
+func (s *taskStore) add(title, owner string) (task, error) {
 	s.mu.Lock()
+	defer s.mu.Unlock()
+
 	if len(s.items) >= s.max {
-		s.mu.Unlock()
-		writeJSON(w, http.StatusInsufficientStorage, map[string]string{"error": "task limit reached"})
-		return
+		return task{}, fmt.Errorf("task limit reached")
 	}
 	s.nextID++
-	t := task{ID: s.nextID, Title: in.Title, Owner: currentUser(r).name}
+	t := task{ID: s.nextID, Title: title, Owner: owner}
 	s.items[t.ID] = t
-	s.mu.Unlock()
-
-	writeJSON(w, http.StatusCreated, t)
+	return t, nil
 }
 
-func (s *taskStore) get(w http.ResponseWriter, r *http.Request) {
-	id, err := strconv.Atoi(r.PathValue("id"))
-	if err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "id must be an integer"})
-		return
-	}
-
+func (s *taskStore) get(id int) (task, bool) {
 	s.mu.RLock()
+	defer s.mu.RUnlock()
 	t, ok := s.items[id]
-	s.mu.RUnlock()
-	if !ok {
-		writeJSON(w, http.StatusNotFound, map[string]string{"error": "task not found"})
-		return
-	}
-	writeJSON(w, http.StatusOK, t)
+	return t, ok
 }
 
-func (s *taskStore) delete(w http.ResponseWriter, r *http.Request) {
-	id, err := strconv.Atoi(r.PathValue("id"))
-	if err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "id must be an integer"})
-		return
-	}
-
+func (s *taskStore) remove(id int) bool {
 	s.mu.Lock()
-	_, ok := s.items[id]
-	delete(s.items, id)
-	s.mu.Unlock()
-	if !ok {
-		writeJSON(w, http.StatusNotFound, map[string]string{"error": "task not found"})
-		return
+	defer s.mu.Unlock()
+	if _, ok := s.items[id]; !ok {
+		return false
 	}
-	w.WriteHeader(http.StatusNoContent)
+	delete(s.items, id)
+	return true
 }

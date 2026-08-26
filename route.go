@@ -60,7 +60,7 @@ type methodEndpoint struct {
 
 // declared returns the group's endpoints in a fixed order, skipping the method
 // fields that were left empty. The order is stable so that registration — and
-// the route manifest later — does not depend on map iteration.
+// the route manifest — does not depend on map iteration.
 func (e Endpoints) declared() []methodEndpoint {
 	all := []methodEndpoint{
 		{"", e.Any},

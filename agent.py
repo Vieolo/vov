@@ -299,7 +299,14 @@ def smoke() -> int:
                 out, _ = proc.communicate()
                 failures.append("server did not shut down within timeout")
             rc = proc.returncode
-            hook_ran = "in memory at exit" in (out or "")
+            log = out or ""
+            hook_ran = "tasks_in_memory" in log
+            # The dependency struct reached a handler: createTask used both the
+            # logger and the S3 client it was handed.
+            deps_reached = "archived" in log and "s3://" in log
+            print(f"   {'ok ' if deps_reached else 'BAD'} handler used injected deps: {deps_reached}")
+            if not deps_reached:
+                failures.append("handler did not reach its injected dependencies")
             if rc != 0:
                 failures.append(f"exit code {rc}, want 0")
             if not hook_ran:

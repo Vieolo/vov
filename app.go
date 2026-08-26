@@ -28,6 +28,14 @@ type AppConfig struct {
 	// across two places.
 	Routes []Route
 
+	// RequireDeps are dependency holders that must be populated before this app
+	// may be built — see [Dependencies]. Listing one turns "forgot to call Set"
+	// from a panic on the first request that happens to touch it into an error
+	// at construction, before the server listens.
+	//
+	// vov never reads what a holder contains; it only asks whether it is ready.
+	RequireDeps []Readiness
+
 	// Stacks are the named middleware combinations endpoints can be wrapped in,
 	// each split into a Pre and Post half by the auth seam — see
 	// [MiddlewareStack]. The stack under [DefaultStackName] applies to every
@@ -88,6 +96,17 @@ func NewApp(cfg AppConfig) (*App, error) {
 	}
 	if app.shutdownTimeout == 0 {
 		app.shutdownTimeout = DefaultShutdownTimeout
+	}
+
+	// Fail closed on unpopulated dependencies: a handler that reaches for them
+	// would panic on the request that first needs them, in production.
+	for i, d := range cfg.RequireDeps {
+		if d == nil {
+			return nil, fmt.Errorf("vov: RequireDeps[%d] is nil", i)
+		}
+		if !d.Ready() {
+			return nil, fmt.Errorf("vov: dependencies %s were never Set", d.Describe())
+		}
 	}
 
 	seenPath := make(map[string]int, len(cfg.Routes))
