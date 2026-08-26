@@ -12,10 +12,11 @@ import (
 const manifestHeader = `# vov route manifest — every endpoint this app declares, and who may reach it.
 # Regenerate whenever a route declaration changes; review the diff.
 #
-#   METHOD  PATH  auth:<mode>  stack:<name>  [roles-any:a|b]  [perms-all:x,y]
+#   METHOD  PATH  auth:<mode>  stack:<name>  [roles-any:a|b]  [perms-all:x,y]  [min-tier:N]
 #
 # roles-any  is satisfied by ANY one of the listed roles       (| reads as "or")
 # perms-all  requires EVERY one of the listed permissions      (, reads as "and")
+# min-tier   requires User.Tier() >= N; refused with 402, not 403
 
 `
 
@@ -89,6 +90,9 @@ func manifestLine(path string, me methodEndpoint) string {
 	}
 	if perms := me.Endpoint.PermissionsAllOf; len(perms) > 0 {
 		fields = append(fields, "perms-all:"+strings.Join(perms, ","))
+	}
+	if tier := me.Endpoint.MinTier; tier > 0 {
+		fields = append(fields, fmt.Sprintf("min-tier:%d", tier))
 	}
 
 	return fmt.Sprintf("%-*s %-*s %s",

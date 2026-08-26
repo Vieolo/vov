@@ -46,6 +46,35 @@ type AppConfig struct {
 	// are outside the framework and get no middleware from it.
 	MiddlewareStacks map[string]MiddlewareStack
 
+	// ServerWrappers wrap the whole assembled handler, outermost first, and
+	// therefore see every request the server receives — not only the ones that
+	// reach an endpoint. They wrap in both directions: a wrapper observes the
+	// response on the way out as well as the request on the way in, which is
+	// what makes access logging and panic recovery possible here.
+	//
+	// That is the difference from MiddlewareStacks, and it is not a shade of
+	// meaning. http.ServeMux answers two kinds of request itself, before
+	// dispatching to anything registered: a path no route declares (404), and a
+	// method the matched path does not declare (405). No endpoint middleware
+	// runs for either. A CORS preflight is exactly the second kind — OPTIONS
+	// against a path registered for GET and PATCH — so a cross-origin browser
+	// app cannot work unless something outside the mux answers it.
+	//
+	// The same is true of the things an operator most wants to be unconditional:
+	// panic recovery, request-id stamping, access logging. An unmatched path
+	// that panics or goes unlogged is precisely the request worth a record.
+	//
+	// Because it wraps the mux, it also covers routes registered straight on
+	// [App.Mux]. That is unavoidable rather than chosen: the mux decides its own
+	// 404 internally, so anything that can see that decision is necessarily
+	// outside everything the mux serves.
+	//
+	// A wrapper runs before routing, so it cannot know which endpoint matched:
+	// no path parameters, no AuthMode, no declared roles. It is also invisible to
+	// [Manifest], which documents endpoint policy. Keep authorization out of it —
+	// a rule declared here cannot be reviewed there.
+	ServerWrappers []Middleware
+
 	// Authenticator resolves the user a request acts as. Endpoints require an
 	// authenticated user unless they declare [NoAuth], so this is required
 	// unless every endpoint opts out — [NewApp] rejects a configuration that
@@ -75,6 +104,7 @@ type AppConfig struct {
 // Construct it with [NewApp].
 type App struct {
 	mux             *http.ServeMux
+	handler         http.Handler // mux wrapped in ServerWrappers; what is served
 	server          *http.Server
 	routes          []Route
 	shutdownTimeout time.Duration
@@ -150,13 +180,18 @@ func NewApp(cfg AppConfig) (*App, error) {
 		app.routes = append(app.routes, r)
 	}
 
+	// Wrap the finished mux. This is the only layer that sees the requests the
+	// mux refuses on its own, so it is what gets served — app.mux is no longer
+	// the whole story once ServerWrappers are set.
+	app.handler = apply(app.mux, cfg.ServerWrappers)
+
 	// Resolve the listen address, then materialize the http.Server vov serves
 	// with. A nil cfg.Server is fine: ToNetHTTPServer treats it as all-defaults.
 	addr := cfg.Address
 	if addr == "" {
 		addr = DefaultAddress
 	}
-	app.server = cfg.Server.ToNetHTTPServer(addr, app.mux)
+	app.server = cfg.Server.ToNetHTTPServer(addr, app.handler)
 
 	return app, nil
 }
@@ -177,10 +212,16 @@ func validateAuth(e Endpoint) error {
 		return fmt.Errorf("unknown AuthMode %q (use %q, %q, or leave it unset for %q)",
 			string(e.AuthMode), AuthModeRequired, AuthModeNone, AuthModeRequired)
 	}
-	// Roles and permissions are checked against a user, and an open endpoint
-	// never resolves one — so these would silently not be enforced.
+	// Roles, permissions, and tier are checked against a user, and an open
+	// endpoint never resolves one — so these would silently not be enforced.
 	if !e.AuthMode.required() && e.constrained() {
-		return errors.New("declares RolesAnyOf or PermissionsAllOf but also vov.AuthModeNone, which resolves no user to check them against")
+		return errors.New("declares RolesAnyOf, PermissionsAllOf, or MinTier but also vov.AuthModeNone, which resolves no user to check them against")
+	}
+	// A negative MinTier admits everyone, including tier 0, which is what
+	// leaving it unset already means — so it is a mistake, not a way to say
+	// "open".
+	if e.MinTier < 0 {
+		return fmt.Errorf("declares a negative MinTier (%d); leave it unset for no paywall", e.MinTier)
 	}
 	for _, r := range e.RolesAnyOf {
 		if r == "" {
@@ -203,11 +244,22 @@ func methodLabel(method string) string {
 	return method
 }
 
-// Mux returns the underlying *http.ServeMux. Handlers registered directly on it
-// bypass the framework's endpoint management — they will not appear in the route
-// manifest later — so use it as an escape hatch for routes vov does not model.
+// Mux returns the underlying *http.ServeMux, for registering routes vov does not
+// model. Handlers registered on it bypass the framework's endpoint management
+// and do not appear in [Manifest].
+//
+// It is the registration surface, not the serving one: it does not include
+// [AppConfig.ServerWrappers], which wrap it. To exercise the app as it is
+// actually served — in a test, or behind another server — use [App.Handler].
 func (a *App) Mux() *http.ServeMux {
 	return a.mux
+}
+
+// Handler returns what the app serves: the mux wrapped in
+// [AppConfig.ServerWrappers]. This is the handler to hand to httptest, or to
+// mount inside a larger server when [App.Run] is not being used.
+func (a *App) Handler() http.Handler {
+	return a.handler
 }
 
 // OnShutdown registers a cleanup function to run during graceful shutdown, after

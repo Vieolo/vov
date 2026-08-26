@@ -89,6 +89,7 @@ JSON_HDR = {"Content-Type": "application/json"}
 AUTH_HDR = {"Authorization": "Bearer t-ramtin"}          # member + tasks.write
 ADMIN_HDR = {"Authorization": "Bearer t-ramtin-admin"}   # also role admin
 OWNER_HDR = {"Authorization": "Bearer t-ramtin-owner"}   # role owner + tasks.write
+PRO_HDR = {"Authorization": "Bearer t-ramtin-pro"}       # member, paid tier 2
 HALF_HDR = {"Authorization": "Bearer t-ramtin-halfadmin"} # role admin, no perm
 READER_HDR = {"Authorization": "Bearer t-ramtin-reader"} # member, no tasks.write
 BOOM_HDR = {"Authorization": "Bearer t-boom"}            # authenticator fails
@@ -187,6 +188,15 @@ def smoke() -> int:
             # stamped by the default stack (and logged).
             check("     401 still has request id", "X-Request-Id" in hdrs, True)
 
+            # A revoked credential is cleared as it is refused, so the browser
+            # stops re-sending a dead cookie for the rest of its 30-day life.
+            status, hdrs, _ = _http("/tasks", headers={"Authorization": "Bearer t-ramtin-revoked"})
+            check("GET  /tasks (revoked credential)", status, 401)
+            check("     401 clears the cookie", "Max-Age=0" in hdrs.get("Set-Cookie", ""), True)
+            # A live credential is not disturbed.
+            _, hdrs, _ = _http("/tasks", headers=AUTH_HDR)
+            check("     valid request sets no cookie", "Set-Cookie" in hdrs, False)
+
             # A failing authenticator is a broken dependency, not a bad password.
             status, _, _ = _http("/tasks", headers=BOOM_HDR)
             check("GET  /tasks (authenticator fails)", status, 500)
@@ -239,6 +249,21 @@ def smoke() -> int:
             status, _, _ = _http("/tasks/1", headers=AUTH_HDR)
             check("GET  /tasks/1 (same URL, no role needed)", status, 200)
 
+            # --- the paywall, and the order refusals are decided in ----------
+            # No credentials at all is 401 — never 402, which would advertise a
+            # price to someone who has not even identified themselves.
+            status, _, _ = _http("/reports")
+            check("GET  /reports (no credentials)", status, 401)
+            # Lacks the required role. Paying would not help, so 403, not 402.
+            status, _, _ = _http("/reports", headers=OWNER_HDR)
+            check("GET  /reports (wrong role, unpaid)", status, 403)
+            # Clears every other requirement and is merely unsubscribed: 402.
+            status, _, _ = _http("/reports", headers=READER_HDR)
+            check("GET  /reports (right role, unpaid)", status, 402)
+            # Paid.
+            status, _, _ = _http("/reports", headers=PRO_HDR)
+            check("GET  /reports (paid tier 2)", status, 200)
+
             # --- one URL, several methods ------------------------------------
             # /tasks/{id} declares GET and DELETE in a single Route.
             status, _, _ = _http("/tasks/1", "DELETE", headers=ADMIN_HDR)
@@ -289,6 +314,42 @@ def smoke() -> int:
 
             status, _, _ = _http("/healthz", "POST", b"")
             check("POST /healthz (wrong method)", status, 405)
+
+            # --- the server seam: requests the mux refuses on its own ---------
+            origin = {"Origin": "https://app.example.com"}
+            preflight = {**origin, "Access-Control-Request-Method": "DELETE"}
+
+            # A preflight is OPTIONS against a path registered for other methods.
+            # Without a seam outside the mux this is a 405 and the browser blocks
+            # the real request.
+            status, hdrs, _ = _http("/tasks/9", "OPTIONS", None, preflight)
+            check("OPT  /tasks/9 (CORS preflight)", status, 204)
+            check("     preflight is allowed", hdrs.get("Access-Control-Allow-Origin"),
+                  "https://app.example.com")
+            check("     preflight allows credentials", hdrs.get("Access-Control-Allow-Credentials"), "true")
+
+            # 404 and 405 must carry CORS headers, or the browser reports a CORS
+            # error instead of the wrong-path bug it actually is.
+            status, hdrs, _ = _http("/nope", headers=origin)
+            check("GET  /nope (unrouted)", status, 404)
+            check("     404 carries CORS", hdrs.get("Access-Control-Allow-Origin"),
+                  "https://app.example.com")
+
+            status, hdrs, _ = _http("/tasks/9", "PUT", b"{}", {**JSON_AUTH, **origin})
+            check("     405 carries CORS", hdrs.get("Access-Control-Allow-Origin"),
+                  "https://app.example.com")
+
+            # An unknown origin gets no allow header, but still gets Vary.
+            _, hdrs, _ = _http("/nope", headers={"Origin": "https://evil.example"})
+            check("     unknown origin refused", "Access-Control-Allow-Origin" in hdrs, False)
+            check("     Vary: Origin set for caches", "Origin" in hdrs.get("Vary", ""), True)
+
+            # The seam covers escape-hatch routes: /boom is registered on the raw
+            # mux and panics, and recovery still turns it into a 500.
+            status, hdrs, _ = _http("/boom", headers=origin)
+            check("GET  /boom (panic on a mux route)", status, 500)
+            check("     recovered 500 carries CORS", hdrs.get("Access-Control-Allow-Origin"),
+                  "https://app.example.com")
 
             # Graceful shutdown: SIGTERM should drain, run the hook, and exit 0.
             proc.send_signal(signal.SIGTERM)
