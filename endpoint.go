@@ -44,6 +44,21 @@ type Endpoint struct {
 	// user, so that combination is a construction error rather than a
 	// requirement that silently does nothing.
 	PermissionsAllOf []string
+
+	// MinTier restricts the endpoint to users whose [User.Tier] is at least this
+	// high. Zero — the default — places no restriction, so only endpoints behind
+	// a paywall mention it.
+	//
+	// A user who is refused here gets **402 Payment Required**, not 403, because
+	// the two say different things to a client: 403 is a denial, 402 is a price.
+	// A frontend can act on that — show the upgrade panel rather than a generic
+	// error — which is why tier is a declaration of its own rather than a
+	// permission.
+	//
+	// Reach for it only for access that money actually unlocks. Ordinal gating
+	// that payment cannot resolve belongs in [Endpoint.PermissionsAllOf], whose
+	// refusal is honest about being final.
+	MinTier int
 }
 
 // declared reports whether the endpoint was filled in at all. Configuration
@@ -54,13 +69,14 @@ func (e Endpoint) declared() bool {
 		e.MiddlewareStack != "" ||
 		e.AuthMode != "" ||
 		len(e.RolesAnyOf) > 0 ||
-		len(e.PermissionsAllOf) > 0
+		len(e.PermissionsAllOf) > 0 ||
+		e.MinTier != 0
 }
 
 // constrained reports whether the endpoint demands anything of the user beyond
 // being authenticated.
 func (e Endpoint) constrained() bool {
-	return len(e.RolesAnyOf) > 0 || len(e.PermissionsAllOf) > 0
+	return len(e.RolesAnyOf) > 0 || len(e.PermissionsAllOf) > 0 || e.MinTier != 0
 }
 
 // wrapped builds the endpoint's request chain from its stack, outside in:
@@ -75,7 +91,7 @@ func (e Endpoint) wrapped(s MiddlewareStack, auth Authenticator) http.Handler {
 	var h http.Handler = e.Handler
 	if e.AuthMode.required() {
 		h = apply(h, s.Post)
-		h = authGuard(h, auth, e.RolesAnyOf, e.PermissionsAllOf)
+		h = authGuard(h, auth, e)
 	}
 	return apply(h, s.Pre)
 }
