@@ -188,6 +188,15 @@ def smoke() -> int:
             # stamped by the default stack (and logged).
             check("     401 still has request id", "X-Request-Id" in hdrs, True)
 
+            # A revoked credential is cleared as it is refused, so the browser
+            # stops re-sending a dead cookie for the rest of its 30-day life.
+            status, hdrs, _ = _http("/tasks", headers={"Authorization": "Bearer t-ramtin-revoked"})
+            check("GET  /tasks (revoked credential)", status, 401)
+            check("     401 clears the cookie", "Max-Age=0" in hdrs.get("Set-Cookie", ""), True)
+            # A live credential is not disturbed.
+            _, hdrs, _ = _http("/tasks", headers=AUTH_HDR)
+            check("     valid request sets no cookie", "Set-Cookie" in hdrs, False)
+
             # A failing authenticator is a broken dependency, not a bad password.
             status, _, _ = _http("/tasks", headers=BOOM_HDR)
             check("GET  /tasks (authenticator fails)", status, 500)

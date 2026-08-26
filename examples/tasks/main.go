@@ -202,13 +202,22 @@ func (u *user) Tier() int {
 // environment. It owns the credential lookup, which in a real service would hit
 // a session table or verify a signature.
 func makeAuthenticator(valid string) vov.Authenticator {
-	return func(r *http.Request) (vov.User, error) {
+	return func(resp vov.AuthResponse, r *http.Request) (vov.User, error) {
 		token := strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")
 		switch {
 		case token == "":
 			return nil, nil // no credentials presented -> 401
 		case token == "t-boom":
 			return nil, errors.New("session store unavailable") // -> 500, not 401
+		case token == valid+"-revoked":
+			// The account is gone, but the credential is a signed cookie that
+			// stays valid for 30 days. Refusing is not enough: clear it here, or
+			// the browser keeps presenting a dead credential until it expires.
+			resp.SetCookie(&http.Cookie{
+				Name: "session", Path: "/", MaxAge: -1,
+				HttpOnly: true, SameSite: http.SameSiteLaxMode,
+			})
+			return nil, nil // -> 401, with the cookie cleared on the way out
 		case token == valid:
 			// An ordinary member: may write tasks, but is not an admin.
 			return &user{name: "ramtin", roles: []string{"member"}, perms: []string{"tasks.write"}}, nil

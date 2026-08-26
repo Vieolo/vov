@@ -95,6 +95,12 @@ directive in `go.mod`).
 
   A missing credential is a 401, but a *failing* authenticator is a 500 — a
   broken session store is not a bad password. Try `Authorization: Bearer t-boom`.
+
+  The authenticator also receives a `vov.AuthResponse`, which can set response
+  headers but not write a response. `t-ramtin-revoked` shows why: the account is
+  gone but its signed cookie stays valid for 30 days, so the request is refused
+  **and** the cookie is cleared on the way out. The same call on the success
+  branch is how you rotate a session for sliding expiry.
 - **A seam around the whole handler** — `AppConfig.ServerWrappers` wrap the
   assembled mux, so it also sees the requests the mux answers *itself*:
 
@@ -157,6 +163,7 @@ curl -s localhost:8080/tasks -H 'Authorization: Bearer t-boom'   # 500, not 401
 #   t-ramtin-halfadmin  admin   only            (role but no permission)
 #   t-ramtin-pro        member  + tasks.write + paid tier 2
 #   t-ramtin-reader     member  only
+#   t-ramtin-revoked    a dead credential: 401, and the cookie is cleared
 curl -s -X POST localhost:8080/tasks -H 'Authorization: Bearer t-ramtin-reader' \
   -H 'Content-Type: application/json' -d '{"title":"x"}'  # 403: lacks tasks.write
 curl -s -X DELETE localhost:8080/tasks/1 -H 'Authorization: Bearer t-ramtin'            # 403: no role
