@@ -306,6 +306,42 @@ def smoke() -> int:
             status, _, _ = _http("/healthz", "POST", b"")
             check("POST /healthz (wrong method)", status, 405)
 
+            # --- the server seam: requests the mux refuses on its own ---------
+            origin = {"Origin": "https://app.example.com"}
+            preflight = {**origin, "Access-Control-Request-Method": "DELETE"}
+
+            # A preflight is OPTIONS against a path registered for other methods.
+            # Without a seam outside the mux this is a 405 and the browser blocks
+            # the real request.
+            status, hdrs, _ = _http("/tasks/9", "OPTIONS", None, preflight)
+            check("OPT  /tasks/9 (CORS preflight)", status, 204)
+            check("     preflight is allowed", hdrs.get("Access-Control-Allow-Origin"),
+                  "https://app.example.com")
+            check("     preflight allows credentials", hdrs.get("Access-Control-Allow-Credentials"), "true")
+
+            # 404 and 405 must carry CORS headers, or the browser reports a CORS
+            # error instead of the wrong-path bug it actually is.
+            status, hdrs, _ = _http("/nope", headers=origin)
+            check("GET  /nope (unrouted)", status, 404)
+            check("     404 carries CORS", hdrs.get("Access-Control-Allow-Origin"),
+                  "https://app.example.com")
+
+            status, hdrs, _ = _http("/tasks/9", "PUT", b"{}", {**JSON_AUTH, **origin})
+            check("     405 carries CORS", hdrs.get("Access-Control-Allow-Origin"),
+                  "https://app.example.com")
+
+            # An unknown origin gets no allow header, but still gets Vary.
+            _, hdrs, _ = _http("/nope", headers={"Origin": "https://evil.example"})
+            check("     unknown origin refused", "Access-Control-Allow-Origin" in hdrs, False)
+            check("     Vary: Origin set for caches", "Origin" in hdrs.get("Vary", ""), True)
+
+            # The seam covers escape-hatch routes: /boom is registered on the raw
+            # mux and panics, and recovery still turns it into a 500.
+            status, hdrs, _ = _http("/boom", headers=origin)
+            check("GET  /boom (panic on a mux route)", status, 500)
+            check("     recovered 500 carries CORS", hdrs.get("Access-Control-Allow-Origin"),
+                  "https://app.example.com")
+
             # Graceful shutdown: SIGTERM should drain, run the hook, and exit 0.
             proc.send_signal(signal.SIGTERM)
             try:

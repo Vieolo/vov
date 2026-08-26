@@ -16,6 +16,7 @@ import (
 	"flag"
 	"fmt"
 	"log"
+	"log/slog"
 	"net/http"
 	"os"
 	"slices"
@@ -39,6 +40,7 @@ type config struct {
 	Debug    bool          `env:"TASKS_DEBUG"`
 	Idle     time.Duration `env:"TASKS_IDLE_TIMEOUT" envDefault:"90s"`
 	Bucket   string        `env:"TASKS_BUCKET" envDefault:"tasks-archive"`
+	Origin   string        `env:"TASKS_ORIGIN" envDefault:"https://app.example.com"`
 }
 
 func main() {
@@ -71,6 +73,16 @@ func main() {
 		Server: &vov.Server{
 			ReadHeaderTimeout: vov.Ptr(5 * time.Second),
 			IdleTimeout:       vov.Ptr(cfg.Idle),
+		},
+		// Wraps the whole handler, so it also covers the requests the mux
+		// refuses on its own — a path no route declares (404), and a method the
+		// path does not declare (405), which is what a CORS preflight is.
+		// Recovery is outermost so it catches panics in everything inside it,
+		// including CORS; CORS sets its headers on the way in, so they survive
+		// on a recovered 500 too.
+		ServerWrappers: []vov.Middleware{
+			recoverPanic(deps.Get().Log),
+			cors(cfg.Origin),
 		},
 		// The middleware combinations this service uses, named once here. Pre
 		// runs outside the auth guard (so it covers rejected requests too); Post
@@ -124,6 +136,12 @@ func main() {
 	// yours — the framework adds no middleware and no auth to them.
 	app.Mux().HandleFunc("GET /version", func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]string{"version": "0.1.0"})
+	})
+
+	// Deliberately panics, to show that ServerWrappers cover escape-hatch
+	// routes too: nothing vov knows about is involved in serving this.
+	app.Mux().HandleFunc("GET /boom", func(w http.ResponseWriter, r *http.Request) {
+		panic("demonstrating panic recovery")
 	})
 
 	// Cleanup hook, run during graceful shutdown.
@@ -276,7 +294,60 @@ func webhookEndpoints() vov.Endpoints {
 	}
 }
 
-// --- middleware -------------------------------------------------------------
+// --- server wrappers --------------------------------------------------------
+
+// cors makes the API usable from a browser on another origin.
+//
+// It answers preflights itself, which it must: a preflight is OPTIONS against a
+// path registered for other methods, so http.ServeMux answers it 405 before any
+// endpoint middleware runs. Nothing inside the mux can fix that.
+func cors(origin string) vov.Middleware {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			// The response varies by Origin, so a shared cache must not hand one
+			// origin's response to another.
+			w.Header().Add("Vary", "Origin")
+
+			// Echo one configured origin, never "*": the browser rejects a
+			// wildcard alongside credentials, and echoing whatever arrives would
+			// let any site read authenticated responses.
+			if o := r.Header.Get("Origin"); o != "" && o == origin {
+				w.Header().Set("Access-Control-Allow-Origin", o)
+				w.Header().Set("Access-Control-Allow-Credentials", "true")
+			}
+
+			// Only a real preflight carries Access-Control-Request-Method, so an
+			// endpoint that genuinely declares OPTIONS still gets its request.
+			if r.Method == http.MethodOptions && r.Header.Get("Access-Control-Request-Method") != "" {
+				w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PATCH, DELETE, OPTIONS")
+				w.Header().Set("Access-Control-Allow-Headers", "Authorization, Content-Type, X-Signature")
+				w.Header().Set("Access-Control-Max-Age", "600")
+				w.WriteHeader(http.StatusNoContent)
+				return
+			}
+			next.ServeHTTP(w, r)
+		})
+	}
+}
+
+// recoverPanic turns a panic into a 500 and a log line instead of a dropped
+// connection. It belongs at the server layer: a panic on an unrouted path is
+// exactly the one an operator wants a record of.
+func recoverPanic(log *slog.Logger) vov.Middleware {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			defer func() {
+				if rec := recover(); rec != nil {
+					log.Error("panic recovered", "method", r.Method, "path", r.URL.Path, "panic", rec)
+					http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+				}
+			}()
+			next.ServeHTTP(w, r)
+		})
+	}
+}
+
+// --- endpoint middleware ----------------------------------------------------
 
 // requestID stamps every response with an id. Part of the default stack, so its
 // presence in a response is evidence that stack ran.

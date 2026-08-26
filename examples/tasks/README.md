@@ -95,9 +95,23 @@ directive in `go.mod`).
 
   A missing credential is a 401, but a *failing* authenticator is a 500 — a
   broken session store is not a bad password. Try `Authorization: Bearer t-boom`.
+- **A seam around the whole handler** — `AppConfig.ServerWrappers` wrap the
+  assembled mux, so it also sees the requests the mux answers *itself*:
+
+  | Request | Without the seam | With it |
+  |---|---|---|
+  | `OPTIONS /tasks/{id}` (CORS preflight) | 405, browser blocks the real call | 204 + CORS headers |
+  | `GET /nope` | 404 with no CORS headers | 404 the browser can actually read |
+  | panic on any path | dropped connection | 500 + a log line |
+
+  `http.ServeMux` decides 404 and 405 before dispatching, so no endpoint
+  middleware ever runs for them — which is why this cannot be a `MiddlewareStack`.
+  Recovery is listed first so it wraps CORS too.
 - **The escape hatch** — `GET /version` is registered straight on the underlying
-  mux via `app.Mux()`, bypassing vov entirely: no middleware, no auth. Reaching
-  for the mux means taking full control.
+  mux via `app.Mux()`, bypassing vov's endpoint management: no stack, no auth.
+  `GET /boom` is registered the same way and panics, showing that
+  `ServerWrappers` still cover it — unavoidably, since the mux's own refusals
+  can only be seen from outside everything it serves.
 - **Server tuning** — a `vov.Server` (the `http.Server` knobs minus `Addr`/`Handler`)
   is supplied through `AppConfig.Server`; defaulted timeouts are pointers, set inline
   with `vov.Ptr`.
