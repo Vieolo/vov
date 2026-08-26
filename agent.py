@@ -191,11 +191,13 @@ def smoke() -> int:
             # NoAuth: there is no user, so the after-auth phase is skipped.
             check("     /healthz skips after-auth", "X-Audit-User" in hdrs, False)
 
-            # NoAuth plus an overridden stack: its own middleware runs...
+            # The "webhook" stack: its own signature check in Pre, and it shares
+            # the request id / logging that the default stack also uses.
             status, hdrs, _ = _http("/webhook", "POST", b"{}", JSON_HDR)
             check("POST /webhook (no signature)", status, 401)
-            # ...and the defaults do not.
-            check("     /webhook drops defaults", "X-Request-Id" in hdrs, False)
+            check("     webhook stack runs its Pre", "X-Request-Id" in hdrs, True)
+            # NoAuth, so the stack's Post half never runs.
+            check("     webhook stack skips Post", "X-Audit-User" in hdrs, False)
 
             status, _, _ = _http("/webhook", "POST", b"{}", {**JSON_HDR, "X-Signature": "sig"})
             check("POST /webhook (signed, no credentials)", status, 200)

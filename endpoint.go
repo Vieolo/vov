@@ -20,11 +20,11 @@ type Endpoint struct {
 	// later phase introduces an error-returning handler type.
 	Handler http.HandlerFunc
 
-	// Middleware declares this endpoint's middleware relative to the app-wide
-	// default stack ([AppConfig.Middleware]). The zero value inherits that stack;
-	// [ExtendMiddleware] adds to it, [OverrideMiddleware] replaces it, and
-	// [NoMiddleware] runs the handler bare.
-	MiddlewareMod MiddlewareMod
+	// Stack names the [MiddlewareStack] from [AppConfig.Stacks] that wraps this
+	// endpoint. Empty selects [DefaultStackName], so the common case says
+	// nothing. Naming a stack replaces the default outright rather than adding
+	// to it; a name that was never declared is a construction error.
+	MiddlewareStack string
 
 	// AuthMod declares this endpoint's authentication requirement. The zero
 	// value requires an authenticated user, so a route that says nothing is
@@ -41,21 +41,19 @@ func (e Endpoint) pattern() string {
 	return e.Method + " " + e.Path
 }
 
-// wrapped builds the endpoint's request chain, from the outside in:
+// wrapped builds the endpoint's request chain from its stack, outside in:
 //
-//	before → [auth guard] → afterAuth → own → Handler
+//	Pre → [auth guard] → Post → Handler
 //
-// The guard is a seam rather than a list element, so no [MiddlewareMod] can
-// remove it — see [authGuard]. When the endpoint declares [NoAuth] there is no
-// guard and no user, so the app-wide after-auth middleware is skipped; the
-// endpoint's own middleware still runs.
-func (e Endpoint) wrapped(beforeDefaults, afterAuthDefaults []Middleware, auth Authenticator) http.Handler {
-	before, afterAuth, own := e.MiddlewareMod.resolve(beforeDefaults, afterAuthDefaults)
-
-	h := apply(e.Handler, own)
+// The guard is the seam between the stack's two halves rather than a member of
+// either, so choosing a different stack can never switch authentication off —
+// only [AuthMod] does that. See [authGuard]. An endpoint declaring [NoAuth] has
+// no guard and no user, so its stack's Post half is skipped.
+func (e Endpoint) wrapped(s MiddlewareStack, auth Authenticator) http.Handler {
+	var h http.Handler = e.Handler
 	if e.AuthMod.required() {
-		h = apply(h, afterAuth)
+		h = apply(h, s.Post)
 		h = authGuard(h, auth)
 	}
-	return apply(h, before)
+	return apply(h, s.Pre)
 }

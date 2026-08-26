@@ -34,36 +34,48 @@ func main() {
 			ReadHeaderTimeout: vov.Ptr(5 * time.Second),
 			IdleTimeout:       vov.Ptr(90 * time.Second),
 		},
-		// The default stack, applied to every endpoint that does not say
-		// otherwise. Outermost first: requestID wraps logging wraps the handler.
-		// This runs outside the auth guard, so it also covers rejected requests.
-		Middleware: []vov.Middleware{requestID, logging},
-		// Applied inside the auth guard, so these can read the user. Skipped on
-		// endpoints that declare vov.NoAuth(), where there is no user to read.
-		AfterAuthMiddleware: []vov.Middleware{auditLog},
+		// The middleware combinations this service uses, named once here. Pre
+		// runs outside the auth guard (so it covers rejected requests too); Post
+		// runs inside it, where the user is known.
+		MiddlewareStacks: map[string]vov.MiddlewareStack{
+			// Applies to every endpoint that does not name another stack.
+			vov.DefaultStackName: {
+				Pre:  []vov.Middleware{requestID, logging},
+				Post: []vov.Middleware{auditLog},
+			},
+			// The default plus a body-type check, for endpoints that take JSON.
+			"json": {
+				Pre:  []vov.Middleware{requestID, logging},
+				Post: []vov.Middleware{auditLog, requireJSON},
+			},
+			// Authenticated by signature rather than by user, so the check goes
+			// in Pre: this stack's endpoints declare NoAuth, and Post never runs
+			// for them.
+			"webhook": {
+				Pre: []vov.Middleware{requestID, logging, verifySignature},
+			},
+			// Deliberately nothing. A health check should not depend on any of it.
+			"bare": {},
+		},
 		// How this app resolves the user of a request. Endpoints require one
 		// unless they declare vov.NoAuth().
 		Authenticator: authenticate,
 		Handlers: []vov.Endpoint{
-			// Open and bare: no auth, no middleware. A health check should not
-			// depend on either.
+			// Open and unwrapped.
 			{Method: http.MethodGet, Path: "/healthz", Handler: healthz,
-				MiddlewareMod: vov.NoMiddleware(), AuthMod: vov.NoAuth()},
+				MiddlewareStack: "bare", AuthMod: vov.NoAuth()},
 
-			// Nothing declared, so: default middleware stack, auth required.
-			// The majority case says nothing and is protected anyway.
+			// Nothing declared, so: default stack, auth required. The majority
+			// case says nothing and is protected anyway.
 			{Method: http.MethodGet, Path: "/tasks", Handler: store.list},
 			{Method: http.MethodGet, Path: "/tasks/{id}", Handler: store.get},
 
-			// Extend: the default stack, plus one more layer inside it. Still
-			// authenticated, because nothing here says otherwise.
+			// Same auth, different wrapping — one word says which.
 			{Method: http.MethodPost, Path: "/tasks", Handler: store.create,
-				MiddlewareMod: vov.ExtendMiddleware(requireJSON)},
+				MiddlewareStack: "json"},
 
-			// A webhook: authenticated by signature rather than by user, so it
-			// opts out of auth and replaces the middleware stack entirely.
 			{Method: http.MethodPost, Path: "/webhook", Handler: webhook,
-				MiddlewareMod: vov.OverrideMiddleware(verifySignature), AuthMod: vov.NoAuth()},
+				MiddlewareStack: "webhook", AuthMod: vov.NoAuth()},
 		},
 	})
 	if err != nil {

@@ -9,32 +9,33 @@ directive in `go.mod`).
 
 - **Declarative endpoints** — method, path, handler, and middleware are given as
   data in `vov.AppConfig.Handlers`, not assembled imperatively.
-- **A default middleware stack** — `AppConfig.Middleware` (`requestID`, `logging`)
-  applies to every endpoint, and each route says how it relates to it:
+- **Named middleware stacks** — `AppConfig.Stacks` declares each combination once;
+  an endpoint picks one by name, and saying nothing picks `"default"`:
 
-  | Route | Declaration | Effective stack |
-  |---|---|---|
-  | `GET /tasks` | *(unset)* | `requestID`, `logging` |
-  | `POST /tasks` | `vov.ExtendMiddleware(requireJSON)` | `requestID`, `logging`, `requireJSON` |
-  | `POST /webhook` | `vov.OverrideMiddleware(verifySignature)` | `verifySignature` |
-  | `GET /healthz` | `vov.NoMiddleware()` | *(none)* |
+  | Route | `Stack` | `Pre` (outside the guard) | `Post` (inside it) |
+  |---|---|---|---|
+  | `GET /tasks` | *(unset → default)* | `requestID`, `logging` | `auditLog` |
+  | `POST /tasks` | `"json"` | `requestID`, `logging` | `auditLog`, `requireJSON` |
+  | `POST /webhook` | `"webhook"` | `requestID`, `logging`, `verifySignature` | — |
+  | `GET /healthz` | `"bare"` | — | — |
 
-  The default stack stamps `X-Request-Id`, so which routes it reached is visible
-  in the response headers.
+  Naming a stack that was never declared is a construction error, not a route
+  that quietly ends up wrapped in nothing.
 - **Auth on by default** — `AppConfig.Authenticator` resolves the user; every
   endpoint requires one unless it declares `vov.NoAuth()`. `/tasks` says nothing
   about auth and is protected anyway; `/healthz` and `/webhook` opt out.
-- **Two middleware phases around the auth seam** — `Middleware` runs outside the
-  guard (so a 401 is still logged and still carries a request id);
-  `AfterAuthMiddleware` runs inside it, where `vov.UserFrom` works — that is how
-  `auditLog` knows who made the request. A full chain:
+- **The auth seam splits every stack** — `Pre` runs outside the guard (so a 401
+  is still logged and still carries a request id); `Post` runs inside it, where
+  `vov.UserFrom` works — that is how `auditLog` knows who made the request:
 
   ```
   requestID → logging → [auth guard] → auditLog → requireJSON → handler
   ```
 
-  The guard is a seam between the phases, not a member of either, so no
-  `MiddlewareMod` can remove it — only `AuthMod` can.
+  The guard is the seam between the halves, not a member of either, so choosing a
+  different stack can never switch authentication off — only `AuthMod` can. On a
+  `NoAuth` endpoint there is no user, so `Post` is skipped: anything such a route
+  needs goes in `Pre`, which is why `verifySignature` lives there.
 
   A missing credential is a 401, but a *failing* authenticator is a 500 — a
   broken session store is not a bad password. Try `Authorization: Bearer t-boom`.
@@ -64,10 +65,10 @@ curl -s localhost:8080/tasks -H 'Authorization: Bearer t-boom'   # 500, not 401
 curl -s -X POST localhost:8080/tasks -H 'Authorization: Bearer t-ramtin' \
   -H 'Content-Type: application/json' -d '{"title":"write the tests"}'   # owner is set from the context
 curl -s -X POST localhost:8080/tasks -H 'Authorization: Bearer t-ramtin' \
-  -H 'Content-Type: text/plain' -d 'nope'                # 415, from the added layer
+  -H 'Content-Type: text/plain' -d 'nope'                # 415, from the "json" stack
 
-curl -si localhost:8080/healthz | grep -i x-request-id   # bare: no id, no auth
-curl -s -X POST localhost:8080/webhook                   # 401, from the overridden stack
+curl -si localhost:8080/healthz | grep -i x-request-id   # "bare": no id, no auth
+curl -s -X POST localhost:8080/webhook                   # 401, from the "webhook" stack
 curl -s -X POST localhost:8080/webhook -H 'X-Signature: sig'
 curl -s localhost:8080/version                           # via the mux escape hatch
 ```

@@ -25,25 +25,15 @@ type AppConfig struct {
 	// Handlers are the endpoints to register, in order.
 	Handlers []Endpoint
 
-	// Middleware is the default stack applied to every endpoint, outermost
-	// first. An endpoint inherits it unless its own Middleware field extends or
-	// overrides it — see [MiddlewareStack].
+	// Stacks are the named middleware combinations endpoints can be wrapped in,
+	// each split into a Pre and Post half by the auth seam — see
+	// [MiddlewareStack]. The stack under [DefaultStackName] applies to every
+	// endpoint that does not name another; an endpoint naming one that was never
+	// declared is a construction error.
 	//
-	// It applies to endpoints only. Routes registered straight on [App.Mux] are
-	// outside the framework and get no middleware from it.
-	//
-	// This stack runs outside the auth guard, so it sees every request to an
-	// endpoint — including the ones the guard rejects, which is what makes a 401
-	// still get logged. Middleware that needs to know who the user is belongs in
-	// AfterAuthMiddleware instead.
-	Middleware []Middleware
-
-	// AfterAuthMiddleware is the default stack applied inside the auth guard,
-	// outermost first. It runs only after a user has been resolved, so it can
-	// read one with [UserFrom] — audit logging, tenant scoping, per-user limits.
-	//
-	// Endpoints that declare [NoAuth] skip it: there is no user for it to read.
-	AfterAuthMiddleware []Middleware
+	// Stacks apply to endpoints only. Routes registered straight on [App.Mux]
+	// are outside the framework and get no middleware from it.
+	MiddlewareStacks map[string]MiddlewareStack
 
 	// Authenticator resolves the user a request acts as. Endpoints require an
 	// authenticated user unless they declare [NoAuth], so this is required
@@ -114,7 +104,12 @@ func NewApp(cfg AppConfig) (*App, error) {
 			return nil, fmt.Errorf("vov: handler %d (%s): requires auth but AppConfig.Authenticator is nil (declare vov.NoAuth() to make the route open)", i, p)
 		}
 
-		app.mux.Handle(p, e.wrapped(cfg.Middleware, cfg.AfterAuthMiddleware, cfg.Authenticator))
+		stack, err := resolveStack(cfg.MiddlewareStacks, e.MiddlewareStack)
+		if err != nil {
+			return nil, fmt.Errorf("vov: handler %d (%s): %w", i, p, err)
+		}
+
+		app.mux.Handle(p, e.wrapped(stack, cfg.Authenticator))
 		app.endpoints = append(app.endpoints, e)
 	}
 

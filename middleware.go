@@ -1,80 +1,78 @@
 package vov
 
-import "net/http"
-
-// Middleware wraps an http.Handler, following the standard net/http idiom. It is
-// declared as data — on an [Endpoint] or as an app-wide default — rather than
-// pre-applied to the handler, so that what wraps a route stays readable off the
-// declaration.
-type Middleware func(http.Handler) http.Handler
-
-// MiddlewareModMode says how an [Endpoint]'s middleware relates to the app-wide
-// defaults. Its zero value inherits them, so an Endpoint that says nothing about
-// middleware gets the defaults — the common case.
-type MiddlewareModMode uint8
-
-const (
-	MiddlewareModModeInherit  MiddlewareModMode = iota // use the app default stack unchanged
-	MiddlewareModModeExtend                            // app default stack, then these
-	MiddlewareModModeOverride                          // exactly these, ignoring the default stack
+import (
+	"fmt"
+	"net/http"
+	"sort"
 )
 
-// MiddlewareMod is an [Endpoint]'s middleware declaration, relative to the
-// app-wide default stack ([AppConfig.Middleware]). It is deliberately not a plain
-// slice: a slice cannot distinguish "inherit the default" from "override with
-// nothing" except by nil-versus-empty, which is invisible at a glance and easy to
-// flip by accident.
+// Middleware wraps an http.Handler, following the standard net/http idiom. It is
+// declared as data — inside a [MiddlewareStack] — rather than pre-applied to the
+// handler, so that what wraps a route stays readable off the declaration.
+type Middleware func(http.Handler) http.Handler
+
+// DefaultStackName is the key in [AppConfig.Stacks] whose stack applies to every
+// endpoint that does not name one.
+const DefaultStackName = "default"
+
+// MiddlewareStack is one named combination of middleware, split by the seam
+// where the request's user becomes known.
 //
-// Build one with [ExtendMiddleware], [OverrideMiddleware], or [NoMiddleware]. The
-// zero value inherits the default stack, so most endpoints leave the field unset.
-type MiddlewareMod struct {
-	mode  MiddlewareModMode
-	stack []Middleware
+// Stacks are declared once in [AppConfig.Stacks] and selected by name from an
+// endpoint. Real services converge on a handful of combinations — public,
+// authenticated, admin, webhook — so naming them puts each combination in one
+// place and turns "what wraps this route?" into a word a reviewer can read off
+// the declaration.
+type MiddlewareStack struct {
+	// Pre runs outside the auth guard, outermost first, for every request to the
+	// endpoint — including the ones the guard rejects. That is what keeps a 401
+	// logged and stamped. Request ids, logging, panic recovery, CORS, and rate
+	// limiting belong here; so does anything an endpoint needs while declaring
+	// [NoAuth], since Post does not run there.
+	Pre []Middleware
+
+	// Post runs inside the auth guard, outermost first, so it can read the user
+	// with [UserFrom]: audit logging, tenant scoping, per-user rate limits.
+	//
+	// It runs only on endpoints that require auth. An endpoint declaring
+	// [NoAuth] has no user, so Post is skipped for it — a stack shared between
+	// protected and open endpoints keeps working, but middleware an open
+	// endpoint depends on must live in Pre.
+	Post []Middleware
 }
 
-// ExtendMiddleware keeps the app-wide defaults and adds m inside them: the
-// defaults stay outermost, and m runs closest to the handler — inside the auth
-// guard, so it can read the user with [UserFrom].
-func ExtendMiddleware(m ...Middleware) MiddlewareMod {
-	return MiddlewareMod{mode: MiddlewareModModeExtend, stack: m}
-}
-
-// OverrideMiddleware replaces the app-wide defaults with exactly m, which runs
-// closest to the handler just as with [ExtendMiddleware]. Use it for endpoints
-// that need a different stack rather than an additional layer — a webhook
-// verified by signature instead of by session, for example.
+// resolveStack returns the stack an endpoint uses: the one it names, or the
+// default when it names none. A name that is not declared is an error rather
+// than a silently empty stack — a route wrapped in nothing because of a typo is
+// exactly the failure this design exists to prevent.
 //
-// It cannot switch off authentication: the auth guard is a seam between the
-// default phases rather than a member of either, so only [AuthMod] controls it.
-func OverrideMiddleware(m ...Middleware) MiddlewareMod {
-	return MiddlewareMod{mode: MiddlewareModModeOverride, stack: m}
-}
-
-// NoMiddleware runs the handler bare, with neither the app-wide default stack nor
-// any addition. It is [OverrideMiddleware] with no arguments, named for the
-// benefit of whoever reads the route later.
-func NoMiddleware() MiddlewareMod {
-	return OverrideMiddleware()
-}
-
-// resolve splits the endpoint's effective middleware into the three groups the
-// request chain is built from, each outermost first:
-//
-//	before   — outside the auth guard; runs for every request to the endpoint
-//	afterAuth — inside the guard; runs only once a user has been resolved
-//	own      — the endpoint's own, innermost, just outside the handler
-//
-// Both Extend and Override put the endpoint's own middleware in the same place;
-// they differ only in whether the app-wide defaults survive around it.
-func (s MiddlewareMod) resolve(beforeDefaults, afterAuthDefaults []Middleware) (before, afterAuth, own []Middleware) {
-	switch s.mode {
-	case MiddlewareModModeOverride:
-		return nil, nil, s.stack
-	case MiddlewareModModeExtend:
-		return beforeDefaults, afterAuthDefaults, s.stack
-	default: // MiddlewareModModeInherit
-		return beforeDefaults, afterAuthDefaults, nil
+// A missing default stack is not an error: an app may legitimately have no
+// app-wide middleware at all.
+func resolveStack(stacks map[string]MiddlewareStack, name string) (MiddlewareStack, error) {
+	if name == "" {
+		name = DefaultStackName
+		if _, ok := stacks[name]; !ok {
+			return MiddlewareStack{}, nil
+		}
 	}
+	s, ok := stacks[name]
+	if !ok {
+		return MiddlewareStack{}, fmt.Errorf("unknown middleware stack %q (declared: %s)", name, declaredStacks(stacks))
+	}
+	return s, nil
+}
+
+// declaredStacks renders the available stack names for an error message.
+func declaredStacks(stacks map[string]MiddlewareStack) string {
+	if len(stacks) == 0 {
+		return "none"
+	}
+	names := make([]string, 0, len(stacks))
+	for n := range stacks {
+		names = append(names, fmt.Sprintf("%q", n))
+	}
+	sort.Strings(names)
+	return fmt.Sprint(names)
 }
 
 // apply wraps h in ms, outermost first: with [A, B] the request flows
