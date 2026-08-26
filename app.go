@@ -117,7 +117,7 @@ func NewApp(cfg AppConfig) (*App, error) {
 			if me.Endpoint.AuthMod.required() && cfg.Authenticator == nil {
 				return nil, fmt.Errorf("vov: route %d (%s): requires auth but AppConfig.Authenticator is nil (declare vov.NoAuth() to make it open)", i, p)
 			}
-			if err := validateAuthMod(me.Endpoint.AuthMod); err != nil {
+			if err := validateAuth(me.Endpoint); err != nil {
 				return nil, fmt.Errorf("vov: route %d (%s): %w", i, p, err)
 			}
 
@@ -152,19 +152,19 @@ func validateRoutePath(r Route) error {
 	return nil
 }
 
-// validateAuthMod rejects declarations that cannot mean what they say.
-func validateAuthMod(a AuthMod) error {
+// validateAuth rejects declarations that cannot mean what they say.
+func validateAuth(e Endpoint) error {
 	// Roles and permissions are checked against a user, and an open endpoint
-	// never resolves one — so this would silently not be enforced.
-	if !a.required() && a.constrained() {
-		return errors.New("declares roles or permissions but also vov.NoAuth(), which resolves no user to check them against")
+	// never resolves one — so these would silently not be enforced.
+	if !e.AuthMod.required() && e.constrained() {
+		return errors.New("declares Roles or Permissions but also vov.NoAuth(), which resolves no user to check them against")
 	}
-	for _, r := range a.roles {
+	for _, r := range e.RolesAnyOf {
 		if r == "" {
 			return errors.New("declares an empty role name")
 		}
 	}
-	for _, p := range a.permissions {
+	for _, p := range e.PermissionsAllOf {
 		if p == "" {
 			return errors.New("declares an empty permission name")
 		}

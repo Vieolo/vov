@@ -169,6 +169,13 @@ func makeAuthenticator(valid string) vov.Authenticator {
 			return &user{name: "ramtin", roles: []string{"member"}, perms: []string{"tasks.write"}}, nil
 		case token == valid+"-admin":
 			return &user{name: "admin", roles: []string{"member", "admin"}, perms: []string{"tasks.write"}}, nil
+		case token == valid+"-owner":
+			// The second of DELETE's any-of roles: also allowed.
+			return &user{name: "owner", roles: []string{"owner"}, perms: []string{"tasks.write"}}, nil
+		case token == valid+"-halfadmin":
+			// Holds the role but not the permission. DELETE needs both, so this
+			// is the case a roles-or-permissions design could not express.
+			return &user{name: "halfadmin", roles: []string{"admin"}}, nil
 		case token == valid+"-reader":
 			// Authenticated, but holds no write permission: 403, never 401.
 			return &user{name: "reader", roles: []string{"member"}}, nil

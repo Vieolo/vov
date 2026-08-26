@@ -21,12 +21,12 @@ func (s *taskStore) collectionEndpoints() vov.Endpoints {
 		// Nothing declared, so: default stack, auth required. The majority case
 		// says nothing and is protected anyway.
 		GET: vov.Endpoint{Handler: s.list},
-		// Reading is open to any member; writing takes a permission. Same URL,
-		// different wrapping and different authority — per method.
+		// Reading is open to any authenticated user; writing takes a permission.
+		// Same URL, different wrapping and different authority — per method.
 		POST: vov.Endpoint{
-			Handler:         s.create,
-			MiddlewareStack: "json",
-			AuthMod:         vov.AuthPermissions("tasks.write"),
+			Handler:          s.create,
+			MiddlewareStack:  "json",
+			PermissionsAllOf: []string{"tasks.write"},
 		},
 	}
 }
@@ -35,9 +35,14 @@ func (s *taskStore) collectionEndpoints() vov.Endpoints {
 func (s *taskStore) itemEndpoints() vov.Endpoints {
 	return vov.Endpoints{
 		GET: vov.Endpoint{Handler: s.get},
-		// Deleting is for admins. Reading the same URL is not — which is the
+		// Deleting needs both: one of the listed roles (any-of) and every listed
+		// permission (all-of). Reading the same URL needs neither — which is the
 		// point of configuring auth per method rather than per URL.
-		DELETE: vov.Endpoint{Handler: s.delete, AuthMod: vov.AuthRoles("admin")},
+		DELETE: vov.Endpoint{
+			Handler:          s.delete,
+			RolesAnyOf:       []string{"admin", "owner"},
+			PermissionsAllOf: []string{"tasks.write"},
+		},
 	}
 }
 

@@ -55,22 +55,13 @@ const (
 	AuthModModeNone                        // no user is required; the route is open
 )
 
-// AuthMod is an [Endpoint]'s auth declaration: whether a user is required, and
-// what that user must hold. The zero value requires an authenticated user and
-// nothing more; [NoAuth] opts out; [AuthRoles] and [AuthPermissions] add
-// requirements on top.
+// AuthMod is an [Endpoint]'s authentication requirement: whether a user must be
+// resolved at all. The zero value requires one; [NoAuth] opts out.
 //
-// Roles and permissions combine differently, and the asymmetry is deliberate:
-//
-//	roles       — any-of. "admin or owner may do this."
-//	permissions — all-of, every one checked. "this needs both of these."
-//
-// Build one with the constructors; the fields are unexported so that there is a
-// single way to express a requirement, and so the zero value stays meaningful.
+// What that user must *hold* is declared separately, on [Endpoint.Roles] and
+// [Endpoint.Permissions].
 type AuthMod struct {
-	mode        AuthModMode
-	roles       []string
-	permissions []string
+	mode AuthModMode
 }
 
 // NoAuth exempts an endpoint from the app's authentication requirement: no user
@@ -81,61 +72,26 @@ func NoAuth() AuthMod {
 	return AuthMod{mode: AuthModModeNone}
 }
 
-// AuthRoles requires an authenticated user holding at least one of the named
-// roles. With no arguments it is the same as the zero value: authentication and
-// nothing more.
-func AuthRoles(roles ...string) AuthMod {
-	return AuthMod{roles: roles}
-}
-
-// AuthPermissions requires an authenticated user holding every one of the named
-// permissions. With no arguments it is the same as the zero value.
-func AuthPermissions(permissions ...string) AuthMod {
-	return AuthMod{permissions: permissions}
-}
-
-// WithRoles adds an any-of role requirement to an existing declaration, so that
-// role and permission requirements can be combined:
-//
-//	vov.AuthPermissions("billing.active").WithRoles("admin", "owner")
-func (a AuthMod) WithRoles(roles ...string) AuthMod {
-	a.roles = append(append([]string(nil), a.roles...), roles...)
-	return a
-}
-
-// WithPermissions adds an all-of permission requirement to an existing
-// declaration:
-//
-//	vov.AuthRoles("admin").WithPermissions("billing.active")
-func (a AuthMod) WithPermissions(permissions ...string) AuthMod {
-	a.permissions = append(append([]string(nil), a.permissions...), permissions...)
-	return a
-}
-
 // required reports whether the endpoint needs an authenticated user.
 func (a AuthMod) required() bool {
 	return a.mode == AuthModModeRequired
 }
 
-// isZero reports whether the declaration says nothing at all — no opt-out and no
-// requirements. AuthMod holds slices and so cannot be compared with ==.
-func (a AuthMod) isZero() bool {
-	return a.mode == AuthModModeRequired && !a.constrained()
-}
-
-// constrained reports whether the endpoint demands anything of the user beyond
-// being authenticated.
-func (a AuthMod) constrained() bool {
-	return len(a.roles) > 0 || len(a.permissions) > 0
-}
-
-// satisfiedBy reports whether u meets the endpoint's role and permission
-// requirements: any of the roles, and all of the permissions.
-func (a AuthMod) satisfiedBy(u User) bool {
-	if len(a.roles) > 0 && !slices.ContainsFunc(a.roles, u.HasRole) {
+// authorized reports whether u satisfies an endpoint's declared requirements.
+//
+// The two combine differently, and the asymmetry follows what they are: a role
+// is an identity, and holding any one of the listed identities is enough; a
+// permission is a capability, and every listed one is needed.
+//
+//	roles       — any-of. "an admin or an owner may do this."
+//	permissions — all-of, every one checked. "this needs both of these."
+//
+// Either list being empty means it places no requirement.
+func authorized(u User, roles, permissions []string) bool {
+	if len(roles) > 0 && !slices.ContainsFunc(roles, u.HasRole) {
 		return false
 	}
-	for _, p := range a.permissions {
+	for _, p := range permissions {
 		if !u.HasPermission(p) {
 			return false
 		}
@@ -179,7 +135,7 @@ func UserFrom(ctx context.Context) (User, bool) {
 // does not know who you are, 403 means it does and the answer is still no.
 // Neither says which requirement failed — that would tell an attacker what to
 // look for.
-func authGuard(next http.Handler, auth Authenticator, mod AuthMod) http.Handler {
+func authGuard(next http.Handler, auth Authenticator, roles, permissions []string) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		u, err := auth(r)
 		if err != nil {
@@ -191,7 +147,7 @@ func authGuard(next http.Handler, auth Authenticator, mod AuthMod) http.Handler 
 			http.Error(w, http.StatusText(http.StatusUnauthorized), http.StatusUnauthorized)
 			return
 		}
-		if !mod.satisfiedBy(u) {
+		if !authorized(u, roles, permissions) {
 			http.Error(w, http.StatusText(http.StatusForbidden), http.StatusForbidden)
 			return
 		}

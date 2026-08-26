@@ -85,6 +85,8 @@ SMOKE_SHUTDOWN_WAIT = 20  # seconds; must exceed the app's ShutdownTimeout
 JSON_HDR = {"Content-Type": "application/json"}
 AUTH_HDR = {"Authorization": "Bearer t-ramtin"}          # member + tasks.write
 ADMIN_HDR = {"Authorization": "Bearer t-ramtin-admin"}   # also role admin
+OWNER_HDR = {"Authorization": "Bearer t-ramtin-owner"}   # role owner + tasks.write
+HALF_HDR = {"Authorization": "Bearer t-ramtin-halfadmin"} # role admin, no perm
 READER_HDR = {"Authorization": "Bearer t-ramtin-reader"} # member, no tasks.write
 BOOM_HDR = {"Authorization": "Bearer t-boom"}            # authenticator fails
 JSON_AUTH = {**JSON_HDR, **AUTH_HDR}
@@ -223,10 +225,14 @@ def smoke() -> int:
             status, _, _ = _http("/tasks", "POST", b'{"title":"nope"}',
                                  {**JSON_HDR, **READER_HDR})
             check("POST /tasks (no permission)", status, 403)
-            # DELETE /tasks/{id} needs role admin; a plain member does not have it.
+            # DELETE /tasks/{id} needs a role AND a permission.
+            # Has the permission, lacks the role:
             status, _, _ = _http("/tasks/1", "DELETE", headers=AUTH_HDR)
-            check("DEL  /tasks/1 (not an admin)", status, 403)
-            # ...but GET on the same URL only needs authentication.
+            check("DEL  /tasks/1 (no role)", status, 403)
+            # Has the role, lacks the permission — roles and permissions are AND:
+            status, _, _ = _http("/tasks/1", "DELETE", headers=HALF_HDR)
+            check("DEL  /tasks/1 (role but no permission)", status, 403)
+            # ...but GET on the same URL needs neither.
             status, _, _ = _http("/tasks/1", headers=AUTH_HDR)
             check("GET  /tasks/1 (same URL, no role needed)", status, 200)
 
@@ -234,6 +240,11 @@ def smoke() -> int:
             # /tasks/{id} declares GET and DELETE in a single Route.
             status, _, _ = _http("/tasks/1", "DELETE", headers=ADMIN_HDR)
             check("DEL  /tasks/1 (admin)", status, 204)
+            # "owner" is the second of the any-of roles: also allowed.
+            status, _, _ = _http("/tasks", "POST", b'{"title":"by owner"}', {**JSON_HDR, **OWNER_HDR})
+            check("POST /tasks (owner)", status, 201)
+            status, _, _ = _http("/tasks/2", "DELETE", headers=OWNER_HDR)
+            check("DEL  /tasks/2 (owner, any-of role)", status, 204)
             status, _, _ = _http("/tasks/1", headers=AUTH_HDR)
             check("GET  /tasks/1 (after delete)", status, 404)
             # Unauthenticated is 401, not 403: vov does not know who you are.
