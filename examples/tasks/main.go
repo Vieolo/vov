@@ -36,7 +36,11 @@ func main() {
 		},
 		// The default stack, applied to every endpoint that does not say
 		// otherwise. Outermost first: requestID wraps logging wraps the handler.
+		// This runs outside the auth guard, so it also covers rejected requests.
 		Middleware: []vov.Middleware{requestID, logging},
+		// Applied inside the auth guard, so these can read the user. Skipped on
+		// endpoints that declare vov.NoAuth(), where there is no user to read.
+		AfterAuthMiddleware: []vov.Middleware{auditLog},
 		// How this app resolves the user of a request. Endpoints require one
 		// unless they declare vov.NoAuth().
 		Authenticator: authenticate,
@@ -227,6 +231,18 @@ func logging(next http.Handler) http.Handler {
 		start := time.Now()
 		next.ServeHTTP(w, r)
 		log.Printf("%s %s (%s)", r.Method, r.URL.Path, time.Since(start))
+	})
+}
+
+// auditLog records who performed the request. It is the reason the after-auth
+// phase exists: it needs the user, so it cannot run in the outer stack, which
+// executes before anyone has been authenticated.
+func auditLog(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		u := currentUser(r)
+		w.Header().Set("X-Audit-User", u.name)
+		log.Printf("audit: %s %s by %s", r.Method, r.URL.Path, u.name)
+		next.ServeHTTP(w, r)
 	})
 }
 

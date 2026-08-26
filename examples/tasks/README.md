@@ -23,9 +23,18 @@ directive in `go.mod`).
   in the response headers.
 - **Auth on by default** — `AppConfig.Authenticator` resolves the user; every
   endpoint requires one unless it declares `vov.NoAuth()`. `/tasks` says nothing
-  about auth and is protected anyway; `/healthz` and `/webhook` opt out. The
-  guard runs *inside* the middleware stack, so a 401 is still logged and still
-  carries a request id, and no `MiddlewareMod` can disable it.
+  about auth and is protected anyway; `/healthz` and `/webhook` opt out.
+- **Two middleware phases around the auth seam** — `Middleware` runs outside the
+  guard (so a 401 is still logged and still carries a request id);
+  `AfterAuthMiddleware` runs inside it, where `vov.UserFrom` works — that is how
+  `auditLog` knows who made the request. A full chain:
+
+  ```
+  requestID → logging → [auth guard] → auditLog → requireJSON → handler
+  ```
+
+  The guard is a seam between the phases, not a member of either, so no
+  `MiddlewareMod` can remove it — only `AuthMod` can.
 
   A missing credential is a 401, but a *failing* authenticator is a 500 — a
   broken session store is not a bad password. Try `Authorization: Bearer t-boom`.

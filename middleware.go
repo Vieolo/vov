@@ -8,9 +8,9 @@ import "net/http"
 // declaration.
 type Middleware func(http.Handler) http.Handler
 
-// stackMode says how an [Endpoint]'s middleware relates to the app-wide default
-// stack. Its zero value inherits, so an Endpoint that says nothing about
-// middleware gets the default — the common case.
+// MiddlewareModMode says how an [Endpoint]'s middleware relates to the app-wide
+// defaults. Its zero value inherits them, so an Endpoint that says nothing about
+// middleware gets the defaults — the common case.
 type MiddlewareModMode uint8
 
 const (
@@ -32,15 +32,20 @@ type MiddlewareMod struct {
 	stack []Middleware
 }
 
-// ExtendMiddleware keeps the app-wide default stack and adds m inside it: the
-// defaults stay outermost, and m runs between them and the handler.
+// ExtendMiddleware keeps the app-wide defaults and adds m inside them: the
+// defaults stay outermost, and m runs closest to the handler — inside the auth
+// guard, so it can read the user with [UserFrom].
 func ExtendMiddleware(m ...Middleware) MiddlewareMod {
 	return MiddlewareMod{mode: MiddlewareModModeExtend, stack: m}
 }
 
-// OverrideMiddleware replaces the app-wide default stack with exactly m. Use it
-// for endpoints that need a different stack rather than an additional layer — a
-// webhook verified by signature instead of by session, for example.
+// OverrideMiddleware replaces the app-wide defaults with exactly m, which runs
+// closest to the handler just as with [ExtendMiddleware]. Use it for endpoints
+// that need a different stack rather than an additional layer — a webhook
+// verified by signature instead of by session, for example.
+//
+// It cannot switch off authentication: the auth guard is a seam between the
+// default phases rather than a member of either, so only [AuthMod] controls it.
 func OverrideMiddleware(m ...Middleware) MiddlewareMod {
 	return MiddlewareMod{mode: MiddlewareModModeOverride, stack: m}
 }
@@ -52,19 +57,23 @@ func NoMiddleware() MiddlewareMod {
 	return OverrideMiddleware()
 }
 
-// resolve returns the effective middleware for the endpoint, outermost first,
-// given the app-wide default stack.
-func (s MiddlewareMod) resolve(defaults []Middleware) []Middleware {
+// resolve splits the endpoint's effective middleware into the three groups the
+// request chain is built from, each outermost first:
+//
+//	before   — outside the auth guard; runs for every request to the endpoint
+//	afterAuth — inside the guard; runs only once a user has been resolved
+//	own      — the endpoint's own, innermost, just outside the handler
+//
+// Both Extend and Override put the endpoint's own middleware in the same place;
+// they differ only in whether the app-wide defaults survive around it.
+func (s MiddlewareMod) resolve(beforeDefaults, afterAuthDefaults []Middleware) (before, afterAuth, own []Middleware) {
 	switch s.mode {
 	case MiddlewareModModeOverride:
-		return s.stack
+		return nil, nil, s.stack
 	case MiddlewareModModeExtend:
-		out := make([]Middleware, 0, len(defaults)+len(s.stack))
-		out = append(out, defaults...)
-		out = append(out, s.stack...)
-		return out
-	default: // stackInherit
-		return defaults
+		return beforeDefaults, afterAuthDefaults, s.stack
+	default: // MiddlewareModModeInherit
+		return beforeDefaults, afterAuthDefaults, nil
 	}
 }
 

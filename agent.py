@@ -155,6 +155,14 @@ def smoke() -> int:
             check("GET  /tasks (authenticated)", status, 200)
             check("     /tasks inherits defaults", "X-Request-Id" in hdrs, True)
 
+            # --- the after-auth phase ----------------------------------------
+            # auditLog runs inside the guard, so it can read the resolved user.
+            check("     after-auth sees the user", hdrs.get("X-Audit-User"), "ramtin")
+
+            # Rejected before the guard passed, so the after-auth phase never ran.
+            _, hdrs, _ = _http("/tasks")
+            check("     401 skips after-auth", "X-Audit-User" in hdrs, False)
+
             # --- routing and handler behavior --------------------------------
             status, hdrs, body = _http("/tasks", "POST", b'{"title":"write the tests"}', JSON_AUTH)
             check("POST /tasks", status, 201)
@@ -180,6 +188,8 @@ def smoke() -> int:
             check("GET  /healthz (no credentials)", status, 200)
             # Default stack dropped via NoMiddleware() -> no request id.
             check("     /healthz is bare", "X-Request-Id" in hdrs, False)
+            # NoAuth: there is no user, so the after-auth phase is skipped.
+            check("     /healthz skips after-auth", "X-Audit-User" in hdrs, False)
 
             # NoAuth plus an overridden stack: its own middleware runs...
             status, hdrs, _ = _http("/webhook", "POST", b"{}", JSON_HDR)

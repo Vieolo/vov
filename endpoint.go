@@ -41,14 +41,21 @@ func (e Endpoint) pattern() string {
 	return e.Method + " " + e.Path
 }
 
-// wrapped returns Handler with its auth guard and effective middleware applied.
-// The middleware chain is outermost (resolved against the app-wide default
-// stack), the auth guard sits inside it, and the handler is innermost — see
-// [authGuard] for why that order.
-func (e Endpoint) wrapped(defaults []Middleware, auth Authenticator) http.Handler {
-	var h http.Handler = e.Handler
+// wrapped builds the endpoint's request chain, from the outside in:
+//
+//	before → [auth guard] → afterAuth → own → Handler
+//
+// The guard is a seam rather than a list element, so no [MiddlewareMod] can
+// remove it — see [authGuard]. When the endpoint declares [NoAuth] there is no
+// guard and no user, so the app-wide after-auth middleware is skipped; the
+// endpoint's own middleware still runs.
+func (e Endpoint) wrapped(beforeDefaults, afterAuthDefaults []Middleware, auth Authenticator) http.Handler {
+	before, afterAuth, own := e.MiddlewareMod.resolve(beforeDefaults, afterAuthDefaults)
+
+	h := apply(e.Handler, own)
 	if e.AuthMod.required() {
+		h = apply(h, afterAuth)
 		h = authGuard(h, auth)
 	}
-	return apply(h, e.MiddlewareMod.resolve(defaults))
+	return apply(h, before)
 }
