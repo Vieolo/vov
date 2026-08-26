@@ -13,8 +13,8 @@ import "net/http"
 // group is a method that URL does not answer.
 type Endpoint struct {
 	// Handler serves the request. It is the standard net/http signature; the
-	// objects an app builds at boot are reached through a [Dependencies] holder
-	// rather than being threaded through here.
+	// objects an app builds at boot are reached through a [Global] holder rather
+	// than being threaded through here.
 	Handler http.HandlerFunc
 
 	// MiddlewareStack names the [MiddlewareStack] from

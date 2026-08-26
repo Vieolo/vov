@@ -61,9 +61,9 @@ func main() {
 	deps.Set(newDeps(cfg))
 
 	app, err := vov.NewApp(vov.AppConfig{
-		// vov checks the holder was populated and refuses to build if not.
-		RequireDeps: []vov.Readiness{deps},
-		Address:     cfg.Addr,
+		// vov checks the global was populated and refuses to build if not.
+		RequireGlobals: []vov.Readiness{deps},
+		Address:        cfg.Addr,
 		// Tune the underlying server with a vov.Server: the http.Server knobs
 		// minus Addr and Handler (vov owns those). Defaulted timeouts are
 		// pointers — leave one nil to take vov's default, or set it inline with

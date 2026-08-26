@@ -12,11 +12,11 @@ import (
 	"github.com/vieolo/vov"
 )
 
-// deps is the application's single dependency holder. Handlers reach it with
-// deps.Get(), which is typed — no assertion, and a wrong field is a compile
-// error. main populates it once, and lists it in AppConfig.RequireDeps so that
-// forgetting to is a construction error rather than a panic in production.
-var deps = vov.NewDependencies[*Deps]()
+// deps is this application's one global. Handlers reach it with deps.Get(),
+// which is typed — no assertion, and a wrong field is a compile error. main
+// populates it once and lists it in AppConfig.RequireGlobals, so forgetting to
+// is a construction error rather than a panic in production.
+var deps = vov.NewGlobal[*Deps]()
 
 // Deps holds what the handlers share. vov never looks inside it.
 type Deps struct {
