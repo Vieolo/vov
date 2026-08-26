@@ -10,6 +10,7 @@ Each module is checked independently because `go ... ./...` never crosses a
 module boundary, so a break in one module stays invisible to the others.
 """
 import json
+import os
 import shutil
 import signal
 import socket
@@ -34,6 +35,7 @@ STAGES = [
     ("build", ["go", "build", "./..."]),
     ("vet", ["go", "vet", "./..."]),
     ("test", ["go", "test", "./..."]),
+    ("fmt", ["gofmt", "-l", "."]),  # see run_stage: any output here is a failure
 ]
 
 
@@ -42,8 +44,17 @@ STAGES = [
 def run_stage(label: str, mod_dir: str, stage_name: str, cmd: list[str]) -> bool:
     where = ROOT / mod_dir
     print(f"-> {label} :: {' '.join(cmd)}")
-    completed = subprocess.run(cmd, cwd=where)
-    ok = completed.returncode == 0
+    if stage_name == "fmt":
+        # gofmt -l exits 0 even when it lists unformatted files, so the output
+        # is the result: any filename printed means the stage failed.
+        completed = subprocess.run(cmd, cwd=where, capture_output=True, text=True)
+        listed = completed.stdout.strip()
+        if listed:
+            print(listed)
+        ok = completed.returncode == 0 and not listed
+    else:
+        completed = subprocess.run(cmd, cwd=where)
+        ok = completed.returncode == 0
     print(f"   {'PASS' if ok else 'FAIL'}: {label} :: {stage_name}")
     return ok
 
@@ -75,6 +86,13 @@ JSON_HDR = {"Content-Type": "application/json"}
 AUTH_HDR = {"Authorization": "Bearer t-ramtin"}
 BOOM_HDR = {"Authorization": "Bearer t-boom"}  # makes the authenticator fail
 JSON_AUTH = {**JSON_HDR, **AUTH_HDR}
+
+# The example reads these at startup; TASKS_TOKEN is declared required.
+SMOKE_ENV = {
+    **os.environ,
+    "TASKS_TOKEN": "t-ramtin",
+    "TASKS_GREETING": "env-ok",
+}
 
 
 def _http(path: str, method: str = "GET", data: bytes | None = None, headers: dict | None = None):
@@ -123,8 +141,20 @@ def smoke() -> int:
             print("SMOKE FAILED: example did not build")
             return 1
 
+        # A required env var that is missing must stop the server from starting,
+        # and the error must name the variable without echoing any value.
+        bare_env = {k: v for k, v in SMOKE_ENV.items() if k != "TASKS_TOKEN"}
+        done = subprocess.run(
+            [binpath], env=bare_env, capture_output=True, text=True, timeout=30
+        )
+        env_ok = done.returncode != 0 and "TASKS_TOKEN" in (done.stdout + done.stderr)
+        print(f"   {'ok ' if env_ok else 'BAD'} missing required env aborts boot: "
+              f"exit={done.returncode} names_var={'TASKS_TOKEN' in (done.stdout + done.stderr)}")
+        if not env_ok:
+            failures.append("missing required env var did not abort startup")
+
         proc = subprocess.Popen(
-            [binpath], stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True
+            [binpath], env=SMOKE_ENV, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True
         )
         try:
             if not _wait_for_bind(proc):
@@ -184,8 +214,10 @@ def smoke() -> int:
             check("GET  /tasks/99", status, 404)
 
             # --- opted-out routes --------------------------------------------
-            status, hdrs, _ = _http("/healthz")
+            status, hdrs, body = _http("/healthz")
             check("GET  /healthz (no credentials)", status, 200)
+            # TASKS_GREETING overrode the built-in default and reached a handler.
+            check("     env value reached the handler", json.loads(body).get("status"), "env-ok")
             # Default stack dropped via NoMiddleware() -> no request id.
             check("     /healthz is bare", "X-Request-Id" in hdrs, False)
             # NoAuth: there is no user, so the after-auth phase is skipped.

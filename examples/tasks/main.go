@@ -21,18 +21,41 @@ import (
 	"github.com/vieolo/vov"
 )
 
+// config is both the declaration of what this service reads from the
+// environment and the way it reads it, so the two cannot drift apart. Required
+// variables stop the server from starting; the rest fall back to a default or a
+// zero value.
+type config struct {
+	Addr     string        `env:"TASKS_ADDR" envDefault:":8080"`
+	Token    string        `env:"TASKS_TOKEN,required"`
+	Greeting string        `env:"TASKS_GREETING" envDefault:"ok"`
+	MaxTasks int           `env:"TASKS_MAX" envDefault:"100"`
+	Debug    bool          `env:"TASKS_DEBUG"`
+	Idle     time.Duration `env:"TASKS_IDLE_TIMEOUT" envDefault:"90s"`
+}
+
 func main() {
-	store := newTaskStore()
+	// Load the environment first: everything below is built from it, which is
+	// why this is a plain function and not a field of vov.AppConfig.
+	var cfg config
+	if err := vov.LoadEnv(&cfg); err != nil {
+		log.Fatalf("tasks: %v", err)
+	}
+	if cfg.Debug {
+		log.Printf("tasks: config %+v", cfg.redacted())
+	}
+
+	store := newTaskStore(cfg.MaxTasks)
 
 	app, err := vov.NewApp(vov.AppConfig{
-		Address: ":8080",
+		Address: cfg.Addr,
 		// Tune the underlying server with a vov.Server: the http.Server knobs
 		// minus Addr and Handler (vov owns those). Defaulted timeouts are
 		// pointers — leave one nil to take vov's default, or set it inline with
 		// vov.Ptr (even to 0, meaning "no timeout"). Other fields pass through.
 		Server: &vov.Server{
 			ReadHeaderTimeout: vov.Ptr(5 * time.Second),
-			IdleTimeout:       vov.Ptr(90 * time.Second),
+			IdleTimeout:       vov.Ptr(cfg.Idle),
 		},
 		// The middleware combinations this service uses, named once here. Pre
 		// runs outside the auth guard (so it covers rejected requests too); Post
@@ -58,11 +81,12 @@ func main() {
 			"bare": {},
 		},
 		// How this app resolves the user of a request. Endpoints require one
-		// unless they declare vov.NoAuth().
-		Authenticator: authenticate,
+		// unless they declare vov.NoAuth(). The valid token comes from the
+		// environment, which is why the authenticator is built from cfg.
+		Authenticator: makeAuthenticator(cfg.Token),
 		Handlers: []vov.Endpoint{
 			// Open and unwrapped.
-			{Method: http.MethodGet, Path: "/healthz", Handler: healthz,
+			{Method: http.MethodGet, Path: "/healthz", Handler: healthz(cfg.Greeting),
 				MiddlewareStack: "bare", AuthMod: vov.NoAuth()},
 
 			// Nothing declared, so: default stack, auth required. The majority
@@ -101,6 +125,15 @@ func main() {
 	}
 }
 
+// redacted returns a copy safe to log: the token is a credential and must never
+// reach a log line, the way vov itself never puts a value in an EnvError.
+func (c config) redacted() config {
+	if c.Token != "" {
+		c.Token = "[redacted]"
+	}
+	return c
+}
+
 // --- auth -------------------------------------------------------------------
 
 // user is this app's own model. It satisfies vov.User by answering the one
@@ -111,19 +144,22 @@ type user struct {
 
 func (u *user) IsAuthenticated() bool { return u != nil && u.name != "" }
 
-// authenticate is the app's vov.Authenticator: it owns the credential lookup,
-// which in a real service would hit a session table or verify a token.
-func authenticate(r *http.Request) (vov.User, error) {
-	token := strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")
-	switch token {
-	case "":
-		return nil, nil // no credentials presented -> 401
-	case "t-boom":
-		return nil, errors.New("session store unavailable") // -> 500, not 401
-	case "t-ramtin":
-		return &user{name: "ramtin"}, nil
-	default:
-		return nil, nil
+// makeAuthenticator builds the app's vov.Authenticator around the token from the
+// environment. It owns the credential lookup, which in a real service would hit
+// a session table or verify a signature.
+func makeAuthenticator(valid string) vov.Authenticator {
+	return func(r *http.Request) (vov.User, error) {
+		token := strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")
+		switch {
+		case token == "":
+			return nil, nil // no credentials presented -> 401
+		case token == "t-boom":
+			return nil, errors.New("session store unavailable") // -> 500, not 401
+		case token == valid:
+			return &user{name: "ramtin"}, nil
+		default:
+			return nil, nil
+		}
 	}
 }
 
@@ -149,11 +185,12 @@ type task struct {
 type taskStore struct {
 	mu     sync.RWMutex
 	nextID int
+	max    int
 	items  map[int]task
 }
 
-func newTaskStore() *taskStore {
-	return &taskStore{items: make(map[int]task)}
+func newTaskStore(max int) *taskStore {
+	return &taskStore{max: max, items: make(map[int]task)}
 }
 
 func (s *taskStore) len() int {
@@ -190,6 +227,11 @@ func (s *taskStore) create(w http.ResponseWriter, r *http.Request) {
 	// The endpoint requires auth, so the guard has already run and there is
 	// always a user here.
 	s.mu.Lock()
+	if len(s.items) >= s.max {
+		s.mu.Unlock()
+		writeJSON(w, http.StatusInsufficientStorage, map[string]string{"error": "task limit reached"})
+		return
+	}
 	s.nextID++
 	t := task{ID: s.nextID, Title: in.Title, Owner: currentUser(r).name}
 	s.items[t.ID] = t
@@ -215,8 +257,12 @@ func (s *taskStore) get(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, t)
 }
 
-func healthz(w http.ResponseWriter, r *http.Request) {
-	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+// healthz reports the greeting configured in the environment, which is the
+// shortest way to see a value travel from an env var to a response body.
+func healthz(greeting string) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		writeJSON(w, http.StatusOK, map[string]string{"status": greeting})
+	}
 }
 
 func webhook(w http.ResponseWriter, r *http.Request) {

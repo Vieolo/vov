@@ -7,6 +7,21 @@ directive in `go.mod`).
 
 ## What it demonstrates
 
+- **Startup environment** — the `config` struct is both the declaration of what
+  the service reads and the way it reads it, so the two cannot drift:
+
+  ```go
+  type config struct {
+      Token string        `env:"TASKS_TOKEN,required"`
+      Addr  string        `env:"TASKS_ADDR" envDefault:":8080"`
+      Idle  time.Duration `env:"TASKS_IDLE_TIMEOUT" envDefault:"90s"`
+  }
+  vov.LoadEnv(&cfg)
+  ```
+
+  `LoadEnv` runs *before* `NewApp`, because everything below is built from it —
+  the store's limit, the authenticator's token, the listen address. Every problem
+  is reported at once, and errors name variables without ever printing a value.
 - **Declarative endpoints** — method, path, handler, and middleware are given as
   data in `vov.AppConfig.Handlers`, not assembled imperatively.
 - **Named middleware stacks** — `AppConfig.Stacks` declares each combination once;
@@ -50,13 +65,17 @@ directive in `go.mod`).
 
 ## Run it
 
+`TASKS_TOKEN` is required — without it the server refuses to start and says so:
+
 ```bash
 go run .
 ```
 
-Then, in another terminal:
+```bash
+TASKS_TOKEN=t-ramtin go run .
+```
 
-The demo token is `t-ramtin`:
+Then, in another terminal (the demo token is whatever you set above):
 
 ```bash
 curl -s localhost:8080/tasks                             # 401: protected by default
