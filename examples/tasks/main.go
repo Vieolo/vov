@@ -84,22 +84,33 @@ func main() {
 		// unless they declare vov.NoAuth(). The valid token comes from the
 		// environment, which is why the authenticator is built from cfg.
 		Authenticator: makeAuthenticator(cfg.Token),
-		Handlers: []vov.Endpoint{
-			// Open and unwrapped.
-			{Method: http.MethodGet, Path: "/healthz", Handler: healthz(cfg.Greeting),
-				MiddlewareStack: "bare", AuthMod: vov.NoAuth()},
-
-			// Nothing declared, so: default stack, auth required. The majority
-			// case says nothing and is protected anyway.
-			{Method: http.MethodGet, Path: "/tasks", Handler: store.list},
-			{Method: http.MethodGet, Path: "/tasks/{id}", Handler: store.get},
-
-			// Same auth, different wrapping — one word says which.
-			{Method: http.MethodPost, Path: "/tasks", Handler: store.create,
-				MiddlewareStack: "json"},
-
-			{Method: http.MethodPost, Path: "/webhook", Handler: webhook,
-				MiddlewareStack: "webhook", AuthMod: vov.NoAuth()},
+		// One Route per URL: every method that URL answers is declared in one
+		// place, and each method carries its own configuration.
+		Routes: []vov.Route{
+			{
+				Path: "/healthz",
+				// Open and unwrapped.
+				GET: vov.Endpoint{Handler: healthz(cfg.Greeting),
+					MiddlewareStack: "bare", AuthMod: vov.NoAuth()},
+			},
+			{
+				Path: "/tasks",
+				// Nothing declared, so: default stack, auth required. The
+				// majority case says nothing and is protected anyway.
+				GET: vov.Endpoint{Handler: store.list},
+				// Same URL, same auth, different wrapping — one word says which.
+				POST: vov.Endpoint{Handler: store.create, MiddlewareStack: "json"},
+			},
+			{
+				Path:   "/tasks/{id}",
+				GET:    vov.Endpoint{Handler: store.get},
+				DELETE: vov.Endpoint{Handler: store.delete},
+			},
+			{
+				Path: "/webhook",
+				POST: vov.Endpoint{Handler: webhook,
+					MiddlewareStack: "webhook", AuthMod: vov.NoAuth()},
+			},
 		},
 	})
 	if err != nil {
@@ -259,6 +270,24 @@ func (s *taskStore) get(w http.ResponseWriter, r *http.Request) {
 
 // healthz reports the greeting configured in the environment, which is the
 // shortest way to see a value travel from an env var to a response body.
+func (s *taskStore) delete(w http.ResponseWriter, r *http.Request) {
+	id, err := strconv.Atoi(r.PathValue("id"))
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "id must be an integer"})
+		return
+	}
+
+	s.mu.Lock()
+	_, ok := s.items[id]
+	delete(s.items, id)
+	s.mu.Unlock()
+	if !ok {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "task not found"})
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
 func healthz(greeting string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]string{"status": greeting})

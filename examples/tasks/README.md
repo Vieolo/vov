@@ -22,12 +22,27 @@ directive in `go.mod`).
   `LoadEnv` runs *before* `NewApp`, because everything below is built from it —
   the store's limit, the authenticator's token, the listen address. Every problem
   is reported at once, and errors name variables without ever printing a value.
-- **Declarative endpoints** — method, path, handler, and middleware are given as
-  data in `vov.AppConfig.Handlers`, not assembled imperatively.
+- **One `Route` per URL** — every method a URL answers is declared together, and
+  each method carries its own configuration:
+
+  ```go
+  {
+      Path:   "/tasks/{id}",
+      GET:    vov.Endpoint{Handler: store.get},
+      DELETE: vov.Endpoint{Handler: store.delete},
+  }
+  ```
+
+  Opening a `Route` shows that URL's whole surface. Declaring the same path in
+  two `Route`s is a construction error, so a URL's methods cannot drift apart —
+  and vov knows which methods exist, so `PUT /tasks/1` gets a 405 with
+  `Allow: DELETE, GET, HEAD`.
+- **Declarative endpoints** — handler, middleware stack, and auth are given as
+  data on each method's `vov.Endpoint`, not assembled imperatively.
 - **Named middleware stacks** — `AppConfig.Stacks` declares each combination once;
   an endpoint picks one by name, and saying nothing picks `"default"`:
 
-  | Route | `Stack` | `Pre` (outside the guard) | `Post` (inside it) |
+  | Endpoint | `MiddlewareStack` | `Pre` (outside the guard) | `Post` (inside it) |
   |---|---|---|---|
   | `GET /tasks` | *(unset → default)* | `requestID`, `logging` | `auditLog` |
   | `POST /tasks` | `"json"` | `requestID`, `logging` | `auditLog`, `requireJSON` |

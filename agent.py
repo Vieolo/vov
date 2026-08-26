@@ -106,12 +106,15 @@ def _http(path: str, method: str = "GET", data: bytes | None = None, headers: di
 
 
 def _port_free(port: int) -> bool:
+    """True when nothing is listening on the port.
+
+    This connects rather than binds: a plain bind() without SO_REUSEADDR fails
+    while sockets from a previous run sit in TIME_WAIT, which would report the
+    port busy even though the server — which does set SO_REUSEADDR — can take it.
+    """
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-        try:
-            s.bind(("127.0.0.1", port))
-            return True
-        except OSError:
-            return False
+        s.settimeout(0.5)
+        return s.connect_ex(("127.0.0.1", port)) != 0
 
 
 def _wait_for_bind(proc: subprocess.Popen, timeout: float = 15.0) -> bool:
@@ -212,6 +215,24 @@ def smoke() -> int:
             check("GET  /tasks/1", status, 200)
             status, _, _ = _http("/tasks/99", headers=AUTH_HDR)
             check("GET  /tasks/99", status, 404)
+
+            # --- one URL, several methods ------------------------------------
+            # /tasks/{id} declares GET and DELETE in a single Route.
+            status, _, _ = _http("/tasks/1", "DELETE", headers=AUTH_HDR)
+            check("DEL  /tasks/1", status, 204)
+            status, _, _ = _http("/tasks/1", headers=AUTH_HDR)
+            check("GET  /tasks/1 (after delete)", status, 404)
+            # DELETE is protected too: each method carries its own auth.
+            status, _, _ = _http("/tasks/2", "DELETE")
+            check("DEL  /tasks/2 (no credentials)", status, 401)
+            # A method the Route does not declare: net/http derives 405 + Allow
+            # from the methods it does.
+            status, hdrs, _ = _http("/tasks/1", "PUT", b"{}", JSON_AUTH)
+            check("PUT  /tasks/1 (undeclared)", status, 405)
+            # HEAD comes along with GET: net/http serves it from the GET handler.
+            check("     405 lists the declared methods",
+                  sorted(hdrs.get("Allow", "").replace(" ", "").split(",")),
+                  ["DELETE", "GET", "HEAD"])
 
             # --- opted-out routes --------------------------------------------
             status, hdrs, body = _http("/healthz")

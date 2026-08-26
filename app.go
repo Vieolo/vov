@@ -22,8 +22,11 @@ const DefaultShutdownTimeout = 15 * time.Second
 // are the app-wide operational preferences; more are added here as they are
 // needed rather than imagined up front.
 type AppConfig struct {
-	// Handlers are the endpoints to register, in order.
-	Handlers []Endpoint
+	// Routes are the URLs to serve, in order. Each groups every method of one
+	// URL — see [Route]. A URL may be declared only once: two Routes sharing a
+	// Path is a construction error, since it would split one URL's definition
+	// across two places.
+	Routes []Route
 
 	// Stacks are the named middleware combinations endpoints can be wrapped in,
 	// each split into a Pre and Post half by the auth seam — see
@@ -65,7 +68,7 @@ type AppConfig struct {
 type App struct {
 	mux             *http.ServeMux
 	server          *http.Server
-	endpoints       []Endpoint
+	routes          []Route
 	shutdownTimeout time.Duration
 
 	mu         sync.Mutex
@@ -87,30 +90,42 @@ func NewApp(cfg AppConfig) (*App, error) {
 		app.shutdownTimeout = DefaultShutdownTimeout
 	}
 
-	seen := make(map[string]struct{}, len(cfg.Handlers))
-	for i, e := range cfg.Handlers {
-		if err := validateEndpoint(e); err != nil {
-			return nil, fmt.Errorf("vov: handler %d (%q %q): %w", i, e.Method, e.Path, err)
+	seenPath := make(map[string]int, len(cfg.Routes))
+	for i, r := range cfg.Routes {
+		if err := validateRoutePath(r); err != nil {
+			return nil, fmt.Errorf("vov: route %d (%q): %w", i, r.Path, err)
 		}
-		p := e.pattern()
-		if _, dup := seen[p]; dup {
-			return nil, fmt.Errorf("vov: handler %d: duplicate route %q", i, p)
+		if prev, dup := seenPath[r.Path]; dup {
+			return nil, fmt.Errorf("vov: route %d: %q is already declared by route %d — a URL's methods belong in one Route", i, r.Path, prev)
 		}
-		seen[p] = struct{}{}
+		seenPath[r.Path] = i
 
-		// Fail closed: a route that requires auth with no way to authenticate is
-		// a configuration bug, not a route that should quietly reject everyone.
-		if e.AuthMod.required() && cfg.Authenticator == nil {
-			return nil, fmt.Errorf("vov: handler %d (%s): requires auth but AppConfig.Authenticator is nil (declare vov.NoAuth() to make the route open)", i, p)
+		declared := r.declared()
+		if len(declared) == 0 {
+			return nil, fmt.Errorf("vov: route %d (%s): declares no method", i, r.Path)
 		}
 
-		stack, err := resolveStack(cfg.MiddlewareStacks, e.MiddlewareStack)
-		if err != nil {
-			return nil, fmt.Errorf("vov: handler %d (%s): %w", i, p, err)
-		}
+		for _, me := range declared {
+			p := r.pattern(me.Method)
+			if me.Endpoint.Handler == nil {
+				return nil, fmt.Errorf("vov: route %d (%s): %s is configured but has no handler", i, r.Path, methodLabel(me.Method))
+			}
 
-		app.mux.Handle(p, e.wrapped(stack, cfg.Authenticator))
-		app.endpoints = append(app.endpoints, e)
+			// Fail closed: an endpoint that requires auth with no way to
+			// authenticate is a configuration bug, not one that should quietly
+			// reject everyone.
+			if me.Endpoint.AuthMod.required() && cfg.Authenticator == nil {
+				return nil, fmt.Errorf("vov: route %d (%s): requires auth but AppConfig.Authenticator is nil (declare vov.NoAuth() to make it open)", i, p)
+			}
+
+			stack, err := resolveStack(cfg.MiddlewareStacks, me.Endpoint.MiddlewareStack)
+			if err != nil {
+				return nil, fmt.Errorf("vov: route %d (%s): %w", i, p, err)
+			}
+
+			app.mux.Handle(p, me.Endpoint.wrapped(stack, cfg.Authenticator))
+		}
+		app.routes = append(app.routes, r)
 	}
 
 	// Resolve the listen address, then materialize the http.Server vov serves
@@ -124,17 +139,22 @@ func NewApp(cfg AppConfig) (*App, error) {
 	return app, nil
 }
 
-func validateEndpoint(e Endpoint) error {
-	if e.Path == "" {
+func validateRoutePath(r Route) error {
+	if r.Path == "" {
 		return errors.New("path is empty")
 	}
-	if e.Path[0] != '/' {
+	if r.Path[0] != '/' {
 		return errors.New(`path must begin with "/"`)
 	}
-	if e.Handler == nil {
-		return errors.New("handler is nil")
-	}
 	return nil
+}
+
+// methodLabel names a method for an error message, including the anonymous one.
+func methodLabel(method string) string {
+	if method == "" {
+		return "Any"
+	}
+	return method
 }
 
 // Mux returns the underlying *http.ServeMux. Handlers registered directly on it
