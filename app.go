@@ -100,7 +100,7 @@ func NewApp(cfg AppConfig) (*App, error) {
 		}
 		seenPath[r.Path] = i
 
-		declared := r.declared()
+		declared := r.Endpoints.declared()
 		if len(declared) == 0 {
 			return nil, fmt.Errorf("vov: route %d (%s): declares no method", i, r.Path)
 		}

@@ -1,9 +1,12 @@
 // Command tasks is a small example service built with the vov framework. It
-// exists to exercise vov's ergonomics from the outside: declarative endpoints, a
-// default middleware stack that endpoints inherit, extend, override, or drop,
-// authentication that applies unless a route opts out, the mux escape hatch, a
-// cleanup hook, and a lifecycle-managed Run. It keeps its data in memory and
+// exists to exercise vov's ergonomics from the outside: environment loaded into
+// a struct before anything is built, one Route per URL with its methods grouped
+// beside their handlers, named middleware stacks split by the auth seam,
+// authentication that applies unless an endpoint opts out, the mux escape hatch,
+// a cleanup hook, and a lifecycle-managed Run. It keeps its data in memory and
 // depends only on the standard library plus vov.
+//
+// This file wires the service together; tasks.go holds the task resource.
 package main
 
 import (
@@ -12,7 +15,6 @@ import (
 	"errors"
 	"log"
 	"net/http"
-	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -84,33 +86,14 @@ func main() {
 		// unless they declare vov.NoAuth(). The valid token comes from the
 		// environment, which is why the authenticator is built from cfg.
 		Authenticator: makeAuthenticator(cfg.Token),
-		// One Route per URL: every method that URL answers is declared in one
-		// place, and each method carries its own configuration.
+		// Which URL each endpoint group is mounted on. The groups themselves
+		// live beside their handlers — see tasks.go — so this list stays a map
+		// of the service's URLs rather than a pile of handler references.
 		Routes: []vov.Route{
-			{
-				Path: "/healthz",
-				// Open and unwrapped.
-				GET: vov.Endpoint{Handler: healthz(cfg.Greeting),
-					MiddlewareStack: "bare", AuthMod: vov.NoAuth()},
-			},
-			{
-				Path: "/tasks",
-				// Nothing declared, so: default stack, auth required. The
-				// majority case says nothing and is protected anyway.
-				GET: vov.Endpoint{Handler: store.list},
-				// Same URL, same auth, different wrapping — one word says which.
-				POST: vov.Endpoint{Handler: store.create, MiddlewareStack: "json"},
-			},
-			{
-				Path:   "/tasks/{id}",
-				GET:    vov.Endpoint{Handler: store.get},
-				DELETE: vov.Endpoint{Handler: store.delete},
-			},
-			{
-				Path: "/webhook",
-				POST: vov.Endpoint{Handler: webhook,
-					MiddlewareStack: "webhook", AuthMod: vov.NoAuth()},
-			},
+			{Path: "/healthz", Endpoints: healthEndpoints(cfg.Greeting)},
+			{Path: "/tasks", Endpoints: store.collectionEndpoints()},
+			{Path: "/tasks/{id}", Endpoints: store.itemEndpoints()},
+			{Path: "/webhook", Endpoints: webhookEndpoints()},
 		},
 	})
 	if err != nil {
@@ -184,118 +167,34 @@ func currentUser(r *http.Request) *user {
 	return u.(*user)
 }
 
-// --- domain -----------------------------------------------------------------
-
-type task struct {
-	ID    int    `json:"id"`
-	Title string `json:"title"`
-	Owner string `json:"owner"`
-	Done  bool   `json:"done"`
-}
-
-type taskStore struct {
-	mu     sync.RWMutex
-	nextID int
-	max    int
-	items  map[int]task
-}
-
-func newTaskStore(max int) *taskStore {
-	return &taskStore{max: max, items: make(map[int]task)}
-}
-
-func (s *taskStore) len() int {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	return len(s.items)
-}
-
-func (s *taskStore) list(w http.ResponseWriter, r *http.Request) {
-	s.mu.RLock()
-	out := make([]task, 0, len(s.items))
-	for _, t := range s.items {
-		out = append(out, t)
-	}
-	s.mu.RUnlock()
-
-	sort.Slice(out, func(i, j int) bool { return out[i].ID < out[j].ID })
-	writeJSON(w, http.StatusOK, out)
-}
-
-func (s *taskStore) create(w http.ResponseWriter, r *http.Request) {
-	var in struct {
-		Title string `json:"title"`
-	}
-	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid JSON body"})
-		return
-	}
-	if in.Title == "" {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "title is required"})
-		return
-	}
-
-	// The endpoint requires auth, so the guard has already run and there is
-	// always a user here.
-	s.mu.Lock()
-	if len(s.items) >= s.max {
-		s.mu.Unlock()
-		writeJSON(w, http.StatusInsufficientStorage, map[string]string{"error": "task limit reached"})
-		return
-	}
-	s.nextID++
-	t := task{ID: s.nextID, Title: in.Title, Owner: currentUser(r).name}
-	s.items[t.ID] = t
-	s.mu.Unlock()
-
-	writeJSON(w, http.StatusCreated, t)
-}
-
-func (s *taskStore) get(w http.ResponseWriter, r *http.Request) {
-	id, err := strconv.Atoi(r.PathValue("id"))
-	if err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "id must be an integer"})
-		return
-	}
-
-	s.mu.RLock()
-	t, ok := s.items[id]
-	s.mu.RUnlock()
-	if !ok {
-		writeJSON(w, http.StatusNotFound, map[string]string{"error": "task not found"})
-		return
-	}
-	writeJSON(w, http.StatusOK, t)
-}
-
-// healthz reports the greeting configured in the environment, which is the
-// shortest way to see a value travel from an env var to a response body.
-func (s *taskStore) delete(w http.ResponseWriter, r *http.Request) {
-	id, err := strconv.Atoi(r.PathValue("id"))
-	if err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "id must be an integer"})
-		return
-	}
-
-	s.mu.Lock()
-	_, ok := s.items[id]
-	delete(s.items, id)
-	s.mu.Unlock()
-	if !ok {
-		writeJSON(w, http.StatusNotFound, map[string]string{"error": "task not found"})
-		return
-	}
-	w.WriteHeader(http.StatusNoContent)
-}
-
-func healthz(greeting string) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		writeJSON(w, http.StatusOK, map[string]string{"status": greeting})
+// healthEndpoints serves /healthz: open and unwrapped, since a health check
+// should depend on neither auth nor middleware. It reports the greeting from
+// the environment, the shortest way to watch a value travel from an env var to
+// a response body.
+func healthEndpoints(greeting string) vov.Endpoints {
+	return vov.Endpoints{
+		GET: vov.Endpoint{
+			MiddlewareStack: "bare",
+			AuthMod:         vov.NoAuth(),
+			Handler: func(w http.ResponseWriter, r *http.Request) {
+				writeJSON(w, http.StatusOK, map[string]string{"status": greeting})
+			},
+		},
 	}
 }
 
-func webhook(w http.ResponseWriter, r *http.Request) {
-	writeJSON(w, http.StatusOK, map[string]string{"received": "ok"})
+// webhookEndpoints serves /webhook: authenticated by signature rather than by
+// user, so it opts out of auth and takes the stack that checks the signature.
+func webhookEndpoints() vov.Endpoints {
+	return vov.Endpoints{
+		POST: vov.Endpoint{
+			MiddlewareStack: "webhook",
+			AuthMod:         vov.NoAuth(),
+			Handler: func(w http.ResponseWriter, r *http.Request) {
+				writeJSON(w, http.StatusOK, map[string]string{"received": "ok"})
+			},
+		},
+	}
 }
 
 // --- middleware -------------------------------------------------------------
