@@ -106,6 +106,7 @@ func main() {
 			{Path: "/healthz", Endpoints: healthEndpoints(cfg.Greeting)},
 			{Path: "/tasks", Endpoints: collectionEndpoints()},
 			{Path: "/tasks/{id}", Endpoints: itemEndpoints()},
+			{Path: "/reports", Endpoints: reportEndpoints()},
 			{Path: "/webhook", Endpoints: webhookEndpoints()},
 		},
 	})
@@ -159,6 +160,7 @@ type user struct {
 	name  string
 	roles []string
 	perms []string
+	tier  int // 0 = free; higher numbers are paid subscriptions
 }
 
 func (u *user) IsAuthenticated() bool { return u != nil && u.name != "" }
@@ -169,6 +171,13 @@ func (u *user) HasRole(role string) bool {
 
 func (u *user) HasPermission(perm string) bool {
 	return u != nil && slices.Contains(u.perms, perm)
+}
+
+func (u *user) Tier() int {
+	if u == nil {
+		return 0
+	}
+	return u.tier
 }
 
 // makeAuthenticator builds the app's vov.Authenticator around the token from the
@@ -194,6 +203,9 @@ func makeAuthenticator(valid string) vov.Authenticator {
 			// Holds the role but not the permission. DELETE needs both, so this
 			// is the case a roles-or-permissions design could not express.
 			return &user{name: "halfadmin", roles: []string{"admin"}}, nil
+		case token == valid+"-pro":
+			// A paying member: the only one who gets past /reports.
+			return &user{name: "pro", roles: []string{"member"}, perms: []string{"tasks.write"}, tier: 2}, nil
 		case token == valid+"-reader":
 			// Authenticated, but holds no write permission: 403, never 401.
 			return &user{name: "reader", roles: []string{"member"}}, nil
@@ -224,6 +236,26 @@ func healthEndpoints(greeting string) vov.Endpoints {
 			AuthMode:        vov.AuthModeNone,
 			Handler: func(w http.ResponseWriter, r *http.Request) {
 				writeJSON(w, http.StatusOK, map[string]string{"status": greeting})
+			},
+		},
+	}
+}
+
+// reportEndpoints serves /reports: behind the paywall.
+//
+// It also demands a role, which is what makes the refusal order visible: a user
+// without the "member" role is refused 403 even if they have not paid, because
+// paying would not get them in. Only someone who clears every other requirement
+// and is merely unsubscribed sees 402.
+func reportEndpoints() vov.Endpoints {
+	return vov.Endpoints{
+		GET: vov.Endpoint{
+			RolesAnyOf: []string{"member"},
+			MinTier:    2,
+			Handler: func(w http.ResponseWriter, r *http.Request) {
+				d := deps.Get()
+				d.Log.Info("report served", "to", currentUser(r).name)
+				writeJSON(w, http.StatusOK, map[string]any{"tasks": d.Store.len()})
 			},
 		},
 	}

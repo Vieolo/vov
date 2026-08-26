@@ -60,7 +60,8 @@ directive in `go.mod`).
   |---|---|---|
   | `GET /tasks/{id}` | *(unset)* | any authenticated user |
   | `POST /tasks` | `Permissions: []string{"tasks.write"}` | holds **every** listed permission |
-  | `DELETE /tasks/{id}` | `Roles: []string{"admin","owner"}`<br>`Permissions: []string{"tasks.write"}` | holds **any** listed role **and every** listed permission |
+  | `DELETE /tasks/{id}` | `RolesAnyOf: []string{"admin","owner"}`<br>`PermissionsAllOf: []string{"tasks.write"}` | holds **any** listed role **and every** listed permission |
+  | `GET /reports` | `RolesAnyOf: []string{"member"}`<br>`MinTier: 2` | holds the role **and** has paid to tier 2+ |
 
   `Roles` is any-of because a role is an identity — any of the listed ones will
   do. `Permissions` is all-of because a permission is a capability and each one
@@ -69,9 +70,16 @@ directive in `go.mod`).
   Note that `GET` and `DELETE` on `/tasks/{id}` differ — reading needs neither,
   deleting needs both — which is why auth is configured per method, not per URL.
 
-  The two refusals mean different things: **401** is "vov does not know who you
-  are", **403** is "it does, and the answer is still no". Neither says which
-  requirement failed.
+  The refusals mean different things: **401** is "vov does not know who you
+  are", **403** is "it does, and the answer is no", **402** is "it does, and the
+  answer is yes as soon as you pay". 403 never says which requirement failed;
+  402 is deliberately distinguishable so a frontend can show an upgrade panel
+  instead of a generic error.
+
+  The order is load-bearing — roles and permissions are checked before tier, so
+  402 only ever means payment is the *last* barrier. `/reports` shows all of it:
+  the `owner` user lacks the `member` role and gets 403 even though they also
+  have not paid, because paying would not let them in.
 - **The auth seam splits every stack** — `Pre` runs outside the guard (so a 401
   is still logged and still carries a request id); `Post` runs inside it, where
   `vov.UserFrom` works — that is how `auditLog` knows who made the request:
@@ -133,12 +141,17 @@ curl -s localhost:8080/tasks -H 'Authorization: Bearer t-boom'   # 500, not 401
 #   t-ramtin-admin      admin   + tasks.write
 #   t-ramtin-owner      owner   + tasks.write   (the any-of role's second entry)
 #   t-ramtin-halfadmin  admin   only            (role but no permission)
+#   t-ramtin-pro        member  + tasks.write + paid tier 2
 #   t-ramtin-reader     member  only
 curl -s -X POST localhost:8080/tasks -H 'Authorization: Bearer t-ramtin-reader' \
   -H 'Content-Type: application/json' -d '{"title":"x"}'  # 403: lacks tasks.write
 curl -s -X DELETE localhost:8080/tasks/1 -H 'Authorization: Bearer t-ramtin'            # 403: no role
 curl -s -X DELETE localhost:8080/tasks/1 -H 'Authorization: Bearer t-ramtin-halfadmin'  # 403: no permission
 curl -s -X DELETE localhost:8080/tasks/1 -H 'Authorization: Bearer t-ramtin-admin'      # 204
+
+curl -s -o /dev/null -w '%{http_code}\n' localhost:8080/reports -H 'Authorization: Bearer t-ramtin-owner'   # 403: wrong role
+curl -s -o /dev/null -w '%{http_code}\n' localhost:8080/reports -H 'Authorization: Bearer t-ramtin-reader'  # 402: unpaid
+curl -s localhost:8080/reports -H 'Authorization: Bearer t-ramtin-pro'                                      # 200
 curl -s -X POST localhost:8080/tasks -H 'Authorization: Bearer t-ramtin' \
   -H 'Content-Type: application/json' -d '{"title":"write the tests"}'   # owner is set from the context
 curl -s -X POST localhost:8080/tasks -H 'Authorization: Bearer t-ramtin' \

@@ -89,6 +89,7 @@ JSON_HDR = {"Content-Type": "application/json"}
 AUTH_HDR = {"Authorization": "Bearer t-ramtin"}          # member + tasks.write
 ADMIN_HDR = {"Authorization": "Bearer t-ramtin-admin"}   # also role admin
 OWNER_HDR = {"Authorization": "Bearer t-ramtin-owner"}   # role owner + tasks.write
+PRO_HDR = {"Authorization": "Bearer t-ramtin-pro"}       # member, paid tier 2
 HALF_HDR = {"Authorization": "Bearer t-ramtin-halfadmin"} # role admin, no perm
 READER_HDR = {"Authorization": "Bearer t-ramtin-reader"} # member, no tasks.write
 BOOM_HDR = {"Authorization": "Bearer t-boom"}            # authenticator fails
@@ -238,6 +239,21 @@ def smoke() -> int:
             # ...but GET on the same URL needs neither.
             status, _, _ = _http("/tasks/1", headers=AUTH_HDR)
             check("GET  /tasks/1 (same URL, no role needed)", status, 200)
+
+            # --- the paywall, and the order refusals are decided in ----------
+            # No credentials at all is 401 — never 402, which would advertise a
+            # price to someone who has not even identified themselves.
+            status, _, _ = _http("/reports")
+            check("GET  /reports (no credentials)", status, 401)
+            # Lacks the required role. Paying would not help, so 403, not 402.
+            status, _, _ = _http("/reports", headers=OWNER_HDR)
+            check("GET  /reports (wrong role, unpaid)", status, 403)
+            # Clears every other requirement and is merely unsubscribed: 402.
+            status, _, _ = _http("/reports", headers=READER_HDR)
+            check("GET  /reports (right role, unpaid)", status, 402)
+            # Paid.
+            status, _, _ = _http("/reports", headers=PRO_HDR)
+            check("GET  /reports (paid tier 2)", status, 200)
 
             # --- one URL, several methods ------------------------------------
             # /tasks/{id} declares GET and DELETE in a single Route.

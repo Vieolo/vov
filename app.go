@@ -177,10 +177,16 @@ func validateAuth(e Endpoint) error {
 		return fmt.Errorf("unknown AuthMode %q (use %q, %q, or leave it unset for %q)",
 			string(e.AuthMode), AuthModeRequired, AuthModeNone, AuthModeRequired)
 	}
-	// Roles and permissions are checked against a user, and an open endpoint
-	// never resolves one — so these would silently not be enforced.
+	// Roles, permissions, and tier are checked against a user, and an open
+	// endpoint never resolves one — so these would silently not be enforced.
 	if !e.AuthMode.required() && e.constrained() {
-		return errors.New("declares RolesAnyOf or PermissionsAllOf but also vov.AuthModeNone, which resolves no user to check them against")
+		return errors.New("declares RolesAnyOf, PermissionsAllOf, or MinTier but also vov.AuthModeNone, which resolves no user to check them against")
+	}
+	// A negative MinTier admits everyone, including tier 0, which is what
+	// leaving it unset already means — so it is a mistake, not a way to say
+	// "open".
+	if e.MinTier < 0 {
+		return fmt.Errorf("declares a negative MinTier (%d); leave it unset for no paywall", e.MinTier)
 	}
 	for _, r := range e.RolesAnyOf {
 		if r == "" {

@@ -28,6 +28,15 @@ type User interface {
 
 	// HasPermission reports whether the user holds the named permission.
 	HasPermission(permission string) bool
+
+	// Tier reports the user's paid tier: 0 for free, and higher numbers for
+	// higher subscriptions. It is ordinal, so an endpoint declaring
+	// [Endpoint.MinTier] admits every tier at or above it and a subscription
+	// upgrade never removes access.
+	//
+	// A model with nothing to sell returns 0, which is honest and fail-closed:
+	// an endpoint that later gates on tier refuses rather than opening.
+	Tier() int
 }
 
 // Authenticator resolves the [User] a request acts as. The app supplies it,
@@ -140,11 +149,22 @@ func UserFrom(ctx context.Context) (User, bool) {
 // of a [MiddlewareStack]: no endpoint can drop its authentication by choosing a
 // different stack.
 //
-// The two refusals are different facts and get different codes: 401 means vov
-// does not know who you are, 403 means it does and the answer is still no.
-// Neither says which requirement failed — that would tell an attacker what to
-// look for.
-func authGuard(next http.Handler, auth Authenticator, roles, permissions []string) http.Handler {
+// The refusals are different facts and get different codes:
+//
+//	401  vov does not know who you are
+//	403  it does, and the answer is no
+//	402  it does, and the answer is yes as soon as you pay
+//
+// 403 never says which role or permission was missing — that would tell an
+// attacker what to look for. 402 is deliberately distinguishable, because it is
+// not really a denial: it is a price, the client is expected to act on it, and
+// what it discloses ("this resource is paid") is on the pricing page anyway.
+//
+// The order is load-bearing. Roles and permissions are checked before tier, so
+// 402 is returned only when payment is the last remaining barrier. Answering 402
+// to someone who also lacks the required role would send them to a checkout page
+// for access they still would not have.
+func authGuard(next http.Handler, auth Authenticator, e Endpoint) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		u, err := auth(r)
 		if err != nil {
@@ -156,8 +176,12 @@ func authGuard(next http.Handler, auth Authenticator, roles, permissions []strin
 			http.Error(w, http.StatusText(http.StatusUnauthorized), http.StatusUnauthorized)
 			return
 		}
-		if !authorized(u, roles, permissions) {
+		if !authorized(u, e.RolesAnyOf, e.PermissionsAllOf) {
 			http.Error(w, http.StatusText(http.StatusForbidden), http.StatusForbidden)
+			return
+		}
+		if e.MinTier > 0 && u.Tier() < e.MinTier {
+			http.Error(w, http.StatusText(http.StatusPaymentRequired), http.StatusPaymentRequired)
 			return
 		}
 		next.ServeHTTP(w, r.WithContext(ContextWithUser(r.Context(), u)))
