@@ -11,31 +11,42 @@ import (
 // handler, so that what wraps a route stays readable off the declaration.
 type Middleware func(http.Handler) http.Handler
 
-// DefaultStackName is the key in [AppConfig.Stacks] whose stack applies to every
+// DefaultStackName is the key in [AppConfig.MiddlewareStacks] whose stack applies to every
 // endpoint that does not name one.
 const DefaultStackName = "default"
 
 // MiddlewareStack is one named combination of middleware, split by the seam
 // where the request's user becomes known.
 //
-// Stacks are declared once in [AppConfig.Stacks] and selected by name from an
+// Stacks are declared once in [AppConfig.MiddlewareStacks] and selected by name from an
 // endpoint. Real services converge on a handful of combinations — public,
 // authenticated, admin, webhook — so naming them puts each combination in one
 // place and turns "what wraps this route?" into a word a reviewer can read off
 // the declaration.
 type MiddlewareStack struct {
-	// Pre runs outside the auth guard, outermost first, for every request to the
-	// endpoint — including the ones the guard rejects. That is what keeps a 401
-	// logged and stamped. Request ids, logging, panic recovery, CORS, and rate
-	// limiting belong here; so does anything an endpoint needs while declaring
-	// [NoAuth], since Post does not run there.
+	// Pre runs outside the auth guard, outermost first, for every request that
+	// reaches this endpoint — including the ones the guard rejects, which is what
+	// keeps a 401 logged and stamped.
+	//
+	// "Reaches this endpoint" is the limit, and it matters. Anything that must
+	// see every request the server receives — CORS, panic recovery, access
+	// logging, request ids on unrouted paths — belongs in
+	// [AppConfig.ServerWrappers] instead. http.ServeMux answers a request for an
+	// undeclared path (404) or an undeclared method (405) itself, before any Pre
+	// middleware exists to run, and a CORS preflight is exactly such a request:
+	// put CORS here and a browser client silently breaks.
+	//
+	// What belongs here is endpoint-scoped and must precede authentication: a
+	// per-route rate limit, a body-size cap, a webhook signature check. So does
+	// anything an endpoint needs while declaring [AuthModeNone], since Post does
+	// not run there.
 	Pre []Middleware
 
 	// Post runs inside the auth guard, outermost first, so it can read the user
 	// with [UserFrom]: audit logging, tenant scoping, per-user rate limits.
 	//
 	// It runs only on endpoints that require auth. An endpoint declaring
-	// [NoAuth] has no user, so Post is skipped for it — a stack shared between
+	// [AuthModeNone] has no user, so Post is skipped for it — a stack shared between
 	// protected and open endpoints keeps working, but middleware an open
 	// endpoint depends on must live in Pre.
 	Post []Middleware

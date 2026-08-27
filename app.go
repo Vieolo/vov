@@ -76,7 +76,7 @@ type AppConfig struct {
 	ServerWrappers []Middleware
 
 	// Authenticator resolves the user a request acts as. Endpoints require an
-	// authenticated user unless they declare [NoAuth], so this is required
+	// authenticated user unless they declare [AuthModeNone], so this is required
 	// unless every endpoint opts out — [NewApp] rejects a configuration that
 	// needs an authenticator and has none, rather than starting a server whose
 	// every protected route answers 401.

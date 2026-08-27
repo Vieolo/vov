@@ -88,7 +88,10 @@ func main() {
 		// runs outside the auth guard (so it covers rejected requests too); Post
 		// runs inside it, where the user is known.
 		MiddlewareStacks: map[string]vov.MiddlewareStack{
-			// Applies to every endpoint that does not name another stack.
+			// requestID and logging sit here so each response says which stack
+			// ran, which is what the smoke suite asserts on. A production app
+			// would hoist both into ServerWrappers instead, so that unrouted
+			// requests get an id and a log line too.
 			vov.DefaultStackName: {
 				Pre:  []vov.Middleware{requestID, logging},
 				Post: []vov.Middleware{auditLog},
