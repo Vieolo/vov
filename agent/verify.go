@@ -10,11 +10,18 @@ import (
 
 // stages are run against every module, in order: a module that does not build
 // cannot usefully be vetted, and one that does not vet cannot usefully be tested.
+//
+// The build stage discards its output. A plain `go build ./...` writes each main
+// package's executable into the module directory, so running the checks would
+// leave a 10 MB agent and a 13 MB tasks binary in the working tree, waiting to be
+// committed by accident. os.DevNull is what makes that portable — and unlike an
+// output directory, it is accepted by library-only modules too, which have no
+// executable to write at all.
 var stages = []struct {
 	name string
 	args []string
 }{
-	{"build", []string{"go", "build", "./..."}},
+	{"build", []string{"go", "build", "-o", os.DevNull, "./..."}},
 	{"vet", []string{"go", "vet", "./..."}},
 	{"test", []string{"go", "test", "./..."}},
 	{"fmt", []string{"gofmt", "-l", "."}},
