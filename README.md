@@ -1,10 +1,13 @@
 # vov
 
-A declarative, batteries-included Go backend framework.
+A declarative, batteries-included Go backend framework, using standard `net/http` under the hood. `vov` holds all the configuration of the server and the handlers via declarations instead of closures.
 
-Handlers keep the standard `net/http` signature. What changes is that the facts
-governing a route — its methods, its middleware, who may call it — stop being
-buried in closures and become data you can read, diff, and generate from.
+## Features
+- The App object, holding all the config of the application
+    - Named middleware stack, reusable on the endpoint level
+
+
+## Example 
 
 ```go
 app, err := vov.NewApp(vov.AppConfig{
