@@ -11,12 +11,13 @@ A declarative, batteries-included Go backend framework, using standard `net/http
 
 ```go
 app, err := vov.NewApp(vov.AppConfig{
-    Address:       ":8080",
-    Authenticator: authenticate,
+    Address: ":8080",
 
-    // Wraps every HTTP request, including the 404s and 405s the mux answers
-    // itself. Channel-scoped: a tool call inside a request is not wrapped.
+    // Everything belonging to the HTTP channel. ServerWrappers cover every
+    // request the server receives, including the 404s and 405s the mux answers
+    // itself — and the POST carrying a tool call, but not the call inside it.
     API: vov.APIConfig{
+        Authenticator:  authenticate,
         ServerWrappers: []vov.Middleware{recoverPanic(log), cors(origin)},
     },
 

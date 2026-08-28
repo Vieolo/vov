@@ -25,10 +25,9 @@ import (
 //	    MCPTool:     &vov.MCPTool{Name: "list_tasks", Description: listTasksDoc},
 //	}
 //
-// Declaring an MCPTool does not by itself serve anything. A protocol package — see
-// the vov/mcp module — reads these declarations and exposes them; vov itself only
-// records that the endpoint is meant to be reachable that way, which is a fact
-// worth having in the manifest whether or not a server is mounted.
+// Declaring an MCPTool does not by itself serve anything: [AppConfig.MCP] is what
+// builds a server. On its own it records that the endpoint is meant to be
+// reachable that way, which is a fact worth having in the manifest either way.
 type MCPTool struct {
 	// Name is what an assistant calls, e.g. "list_tasks". It must be unique
 	// across the app.
@@ -49,9 +48,10 @@ type MCPTool struct {
 // exposes one. It is the app-level half of the declaration; the per-endpoint half
 // is [MCPTool].
 //
-// Setting it does not start anything. It records what the server is called and
-// how a caller is identified, so that the vov/mcp module can build a handler from
-// declarations alone rather than being handed a second copy of them.
+// It records what the server is called and how a caller is identified, so that
+// the handler is built from declarations alone rather than from a second copy of
+// them. Give it a Path and [NewApp] mounts it; otherwise take it from
+// [App.MCPHandler].
 type MCPConfig struct {
 	// Name and Version identify this server to clients. Both are required when
 	// MCPConfig is set.
@@ -73,7 +73,7 @@ type MCPConfig struct {
 	// a different thing from the session cookie a browser sends.
 	//
 	// An app whose tool endpoint honours its ordinary credentials passes the
-	// same function it gave [AppConfig.Authenticator].
+	// same function it gave [APIConfig.Authenticator].
 	Authenticate Authenticator
 
 	// Path is the URL the tool server is served at, e.g. "/mcp". Setting it is

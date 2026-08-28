@@ -59,13 +59,6 @@ type AppConfig struct {
 	// endpoint added later is covered the moment it exists.
 	Scopes *ScopePolicy
 
-	// Authenticator resolves the user a request acts as. Endpoints require an
-	// authenticated user unless they declare [AuthModeNone], so this is required
-	// unless every endpoint opts out — [NewApp] rejects a configuration that
-	// needs an authenticator and has none, rather than starting a server whose
-	// every protected route answers 401.
-	Authenticator Authenticator
-
 	// Address is the TCP listen address, e.g. ":8080". Defaults to
 	// [DefaultAddress] when empty.
 	Address string
@@ -105,6 +98,22 @@ type AppConfig struct {
 // declaration, which is the property in-process dispatch exists to preserve;
 // only the machinery around a request is channel-specific.
 type APIConfig struct {
+	// Authenticator resolves the user an HTTP request acts as. Endpoints require
+	// an authenticated user unless they declare [AuthModeNone], so this is
+	// required unless every endpoint opts out — [NewApp] rejects a configuration
+	// that needs an authenticator and has none, rather than starting a server
+	// whose every protected route answers 401.
+	//
+	// It is per channel because credentials are. A tool call is authenticated by
+	// [MCPConfig.Authenticate], which an application may set to this same
+	// function when its tool endpoint honours ordinary credentials — and will not
+	// when it honours OAuth access tokens bound to an audience, which is a
+	// different thing from the cookie a browser sends.
+	//
+	// The guard calls exactly one of the two, never both: a tool call arrives
+	// with its principal already vouched for, so this never runs for it.
+	Authenticator Authenticator
+
 	// ServerWrappers wrap the whole assembled handler, outermost first, and
 	// therefore see every request the server receives — not only the ones that
 	// reach an endpoint. They wrap in both directions: a wrapper observes the
@@ -218,8 +227,8 @@ func NewApp(cfg AppConfig) (*App, error) {
 			// Fail closed: an endpoint that requires auth with no way to
 			// authenticate is a configuration bug, not one that should quietly
 			// reject everyone.
-			if me.Endpoint.AuthMode.required() && cfg.Authenticator == nil {
-				return nil, fmt.Errorf("vov: route %d (%s): requires auth but AppConfig.Authenticator is nil (declare vov.AuthModeNone to make it open)", i, p)
+			if me.Endpoint.AuthMode.required() && cfg.API.Authenticator == nil {
+				return nil, fmt.Errorf("vov: route %d (%s): requires auth but AppConfig.API.Authenticator is nil (declare vov.AuthModeNone to make it open)", i, p)
 			}
 			if err := validateAuth(me.Endpoint); err != nil {
 				return nil, fmt.Errorf("vov: route %d (%s): %w", i, p, err)
@@ -252,7 +261,7 @@ func NewApp(cfg AppConfig) (*App, error) {
 				return nil, fmt.Errorf("vov: route %d (%s): %w", i, p, err)
 			}
 
-			app.mux.Handle(p, me.Endpoint.wrapped(stack, cfg.Authenticator, scope))
+			app.mux.Handle(p, me.Endpoint.wrapped(stack, cfg.API.Authenticator, scope))
 		}
 		app.routes = append(app.routes, r)
 	}

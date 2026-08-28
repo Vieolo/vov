@@ -13,12 +13,12 @@ func scopedApp(t *testing.T, rule *ScopeRule, policy *ScopePolicy, granted []str
 	t.Helper()
 	app, err := NewApp(AppConfig{
 		Scopes: policy,
-		Authenticator: func(resp AuthResponse, r *http.Request) (User, error) {
+		API: APIConfig{Authenticator: func(resp AuthResponse, r *http.Request) (User, error) {
 			if granted != nil {
 				resp.SetScopes(granted)
 			}
 			return scopeUser{}, nil
-		},
+		}},
 		Routes: []Route{{
 			Path: "/probe",
 			Endpoints: Endpoints{
@@ -104,9 +104,9 @@ func TestScopeModesLimitEnforcement(t *testing.T) {
 func TestScopesAreCheckedBeforeRoles(t *testing.T) {
 	askedRole := false
 	app, err := NewApp(AppConfig{
-		Authenticator: func(resp AuthResponse, r *http.Request) (User, error) {
+		API: APIConfig{Authenticator: func(resp AuthResponse, r *http.Request) (User, error) {
 			return roleProbeUser{asked: &askedRole}, nil
-		},
+		}},
 		Routes: []Route{{
 			Path: "/probe",
 			Endpoints: Endpoints{GET: Endpoint{
@@ -176,8 +176,8 @@ func TestUnlistedMethodIsUngoverned(t *testing.T) {
 // endpoint that means "no scope needed" says so instead of being silent.
 func TestScopeNoneOptsOut(t *testing.T) {
 	app, err := NewApp(AppConfig{
-		Scopes:        &ScopePolicy{API: map[string][]string{http.MethodGet: {"read"}}},
-		Authenticator: func(AuthResponse, *http.Request) (User, error) { return scopeUser{}, nil },
+		Scopes: &ScopePolicy{API: map[string][]string{http.MethodGet: {"read"}}},
+		API:    APIConfig{Authenticator: func(AuthResponse, *http.Request) (User, error) { return scopeUser{}, nil }},
 		Routes: []Route{{
 			Path:      "/probe",
 			Endpoints: Endpoints{GET: Endpoint{ScopeAllOf: ScopeNone(), Handler: func(http.ResponseWriter, *http.Request) {}}},
@@ -215,10 +215,10 @@ func TestScopeAllOfWithAuthModeNoneIsRejected(t *testing.T) {
 func TestScopesReachTheHandler(t *testing.T) {
 	var seen []string
 	app, err := NewApp(AppConfig{
-		Authenticator: func(resp AuthResponse, r *http.Request) (User, error) {
+		API: APIConfig{Authenticator: func(resp AuthResponse, r *http.Request) (User, error) {
 			resp.SetScopes([]string{"read", "write"})
 			return scopeUser{}, nil
-		},
+		}},
 		Routes: []Route{{
 			Path: "/probe",
 			Endpoints: Endpoints{GET: Endpoint{
@@ -254,9 +254,9 @@ func TestChannelsCanBeGovernedDifferently(t *testing.T) {
 	var app *App
 	app, err := NewApp(AppConfig{
 		Scopes: policy,
-		Authenticator: func(resp AuthResponse, r *http.Request) (User, error) {
+		API: APIConfig{Authenticator: func(resp AuthResponse, r *http.Request) (User, error) {
 			return scopeUser{}, nil // a credential carrying nothing
-		},
+		}},
 		Routes: []Route{{
 			Path: "/probe",
 			Endpoints: Endpoints{

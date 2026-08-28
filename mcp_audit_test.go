@@ -18,7 +18,7 @@ func auditApp(t *testing.T, auth Authenticator, seen *[]ToolCall, sink func(Tool
 		sink = func(c ToolCall) { *seen = append(*seen, c) }
 	}
 	app, err := NewApp(AppConfig{
-		Authenticator: auth,
+		API: APIConfig{Authenticator: auth},
 		MCP: &MCPConfig{
 			Name: "probe", Version: "0",
 			Authenticate: auth,
@@ -176,7 +176,7 @@ func TestObserverCannotFailTheCall(t *testing.T) {
 func TestPanickingToolIsContained(t *testing.T) {
 	var seen []ToolCall
 	app, err := NewApp(AppConfig{
-		Authenticator: okAuth,
+		API: APIConfig{Authenticator: okAuth},
 		MCP: &MCPConfig{
 			Name: "probe", Version: "0", Authenticate: okAuth,
 			OnToolCall: func(c ToolCall) { seen = append(seen, c) },

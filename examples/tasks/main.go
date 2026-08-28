@@ -85,6 +85,10 @@ func main() {
 		// The POST that carries a tool call is wrapped by these — it is an HTTP
 		// request like any other — but the tool call inside it is not.
 		API: vov.APIConfig{
+			// How this app resolves the user of an HTTP request. Endpoints
+			// require one unless they declare vov.AuthModeNone. The valid token
+			// comes from the environment, which is why it is built from cfg.
+			Authenticator: makeAuthenticator(cfg.Token),
 			ServerWrappers: []vov.Middleware{
 				recoverPanic(deps.Get().Log),
 				cors(cfg.Origin),
@@ -161,10 +165,7 @@ func main() {
 			// nothing to do after NewApp.
 			Path: "/mcp",
 		},
-		// How this app resolves the user of a request. Endpoints require one
-		// unless they declare vov.NoAuth(). The valid token comes from the
-		// environment, which is why the authenticator is built from cfg.
-		Authenticator: makeAuthenticator(cfg.Token),
+
 		// Which URL each endpoint group is mounted on. The groups themselves
 		// live beside their handlers — see tasks.go — so this list stays a map
 		// of the service's URLs rather than a pile of handler references.
