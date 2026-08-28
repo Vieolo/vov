@@ -46,6 +46,74 @@ type AppConfig struct {
 	// are outside the framework and get no middleware from it.
 	MiddlewareStacks map[string]MiddlewareStack
 
+	// API holds the configuration that applies to requests arriving over HTTP,
+	// and to nothing else — see [APIConfig].
+	API APIConfig
+
+	// Scopes, when set, declares the app-wide scope policy — which channels
+	// enforce scopes, and what an endpoint that names none requires. See
+	// [ScopePolicy].
+	//
+	// Its method maps are what keep a new endpoint governed without anyone
+	// remembering to declare one: the requirement is keyed by method, so an
+	// endpoint added later is covered the moment it exists.
+	Scopes *ScopePolicy
+
+	// Address is the TCP listen address, e.g. ":8080". Defaults to
+	// [DefaultAddress] when empty.
+	Address string
+
+	// ShutdownTimeout bounds graceful shutdown. Defaults to
+	// [DefaultShutdownTimeout] when zero.
+	ShutdownTimeout time.Duration
+
+	// MCP, when set, describes the Model Context Protocol server this app
+	// exposes — see [MCPConfig]. The endpoints it exposes are the ones declaring
+	// an [MCPTool]; nothing is restated here.
+	//
+	// Setting it is enough to serve one: give it a Path and [NewApp] builds the
+	// handler from this and the declarations and mounts it. An app that would
+	// rather mount it itself takes it from [App.MCPHandler].
+	MCP *MCPConfig
+
+	// Server optionally tunes the http.Server vov serves with — timeouts, TLS,
+	// connection hooks, byte limits, and so on. It mirrors http.Server but drops
+	// Addr and Handler, which vov owns (one place for each, no conflicting
+	// values). Its defaulted timeout fields are pointers: a nil field takes vov's
+	// default, an explicit value — including 0, meaning "no timeout" — is honored.
+	// Nil means all defaults. See [Server].
+	Server *Server
+}
+
+// APIConfig is the half of an application's configuration that belongs to its
+// HTTP API and not to its tool interface.
+//
+// The split exists because the two channels are not the same request twice. A
+// tool call reaches its endpoint in process, so anything wrapped around the
+// server sees the one HTTP request that carried it and never the call itself —
+// a distinction that used to live in a doc comment and now lives in a type name.
+// [MCPConfig] is the other half, and holds the things with no API counterpart.
+//
+// Routes are deliberately not here. An endpoint answers both channels from one
+// declaration, which is the property in-process dispatch exists to preserve;
+// only the machinery around a request is channel-specific.
+type APIConfig struct {
+	// Authenticator resolves the user an HTTP request acts as. Endpoints require
+	// an authenticated user unless they declare [AuthModeNone], so this is
+	// required unless every endpoint opts out — [NewApp] rejects a configuration
+	// that needs an authenticator and has none, rather than starting a server
+	// whose every protected route answers 401.
+	//
+	// It is per channel because credentials are. A tool call is authenticated by
+	// [MCPConfig.Authenticate], which an application may set to this same
+	// function when its tool endpoint honours ordinary credentials — and will not
+	// when it honours OAuth access tokens bound to an audience, which is a
+	// different thing from the cookie a browser sends.
+	//
+	// The guard calls exactly one of the two, never both: a tool call arrives
+	// with its principal already vouched for, so this never runs for it.
+	Authenticator Authenticator
+
 	// ServerWrappers wrap the whole assembled handler, outermost first, and
 	// therefore see every request the server receives — not only the ones that
 	// reach an endpoint. They wrap in both directions: a wrapper observes the
@@ -73,39 +141,20 @@ type AppConfig struct {
 	// no path parameters, no AuthMode, no declared roles. It is also invisible to
 	// [Manifest], which documents endpoint policy. Keep authorization out of it —
 	// a rule declared here cannot be reviewed there.
-	ServerWrappers []Middleware
-
-	// Authenticator resolves the user a request acts as. Endpoints require an
-	// authenticated user unless they declare [AuthModeNone], so this is required
-	// unless every endpoint opts out — [NewApp] rejects a configuration that
-	// needs an authenticator and has none, rather than starting a server whose
-	// every protected route answers 401.
-	Authenticator Authenticator
-
-	// Address is the TCP listen address, e.g. ":8080". Defaults to
-	// [DefaultAddress] when empty.
-	Address string
-
-	// ShutdownTimeout bounds graceful shutdown. Defaults to
-	// [DefaultShutdownTimeout] when zero.
-	ShutdownTimeout time.Duration
-
-	// MCP, when set, describes the Model Context Protocol server this app
-	// exposes — see [MCPConfig]. The endpoints it exposes are the ones declaring
-	// an [MCPTool]; nothing is restated here.
 	//
-	// Setting it does not serve anything by itself. The vov/mcp module builds a
-	// handler from this and the declarations, which the app mounts where it
-	// likes.
-	MCP *MCPConfig
-
-	// Server optionally tunes the http.Server vov serves with — timeouts, TLS,
-	// connection hooks, byte limits, and so on. It mirrors http.Server but drops
-	// Addr and Handler, which vov owns (one place for each, no conflicting
-	// values). Its defaulted timeout fields are pointers: a nil field takes vov's
-	// default, an explicit value — including 0, meaning "no timeout" — is honored.
-	// Nil means all defaults. See [Server].
-	Server *Server
+	// # A tool call is not one of these
+	//
+	// The HTTP POST carrying a tool call is wrapped, because it is an HTTP
+	// request like any other — [ModeFrom] reports it as [RequestModeAPI], since
+	// it reaches no endpoint. The tool call inside it is not: that reaches its
+	// endpoint in process, which skips wrappers by design.
+	//
+	// So access logging, request ids and metering fire once per transport
+	// request, not once per call. And panic recovery does not reach a tool
+	// handler at all: the protocol SDK dispatches each call on a goroutine of its
+	// own, where a wrapper's deferred recover cannot see it. vov recovers those
+	// itself and reports them through [MCPConfig.OnToolCall].
+	ServerWrappers []Middleware
 }
 
 // App assembles a set of [Endpoint] declarations onto a standard http.ServeMux,
@@ -113,6 +162,8 @@ type AppConfig struct {
 // Construct it with [NewApp].
 type App struct {
 	mcp             *MCPConfig
+	mcpHandler      http.Handler // built when MCP is declared; see App.MCPHandler
+	scopes          *ScopePolicy
 	mux             *http.ServeMux
 	handler         http.Handler // mux wrapped in ServerWrappers; what is served
 	server          *http.Server
@@ -132,6 +183,7 @@ type App struct {
 func NewApp(cfg AppConfig) (*App, error) {
 	app := &App{
 		mcp:             cfg.MCP,
+		scopes:          cfg.Scopes,
 		mux:             http.NewServeMux(),
 		shutdownTimeout: cfg.ShutdownTimeout,
 	}
@@ -175,12 +227,16 @@ func NewApp(cfg AppConfig) (*App, error) {
 			// Fail closed: an endpoint that requires auth with no way to
 			// authenticate is a configuration bug, not one that should quietly
 			// reject everyone.
-			if me.Endpoint.AuthMode.required() && cfg.Authenticator == nil {
-				return nil, fmt.Errorf("vov: route %d (%s): requires auth but AppConfig.Authenticator is nil (declare vov.AuthModeNone to make it open)", i, p)
+			if me.Endpoint.AuthMode.required() && cfg.API.Authenticator == nil {
+				return nil, fmt.Errorf("vov: route %d (%s): requires auth but AppConfig.API.Authenticator is nil (declare vov.AuthModeNone to make it open)", i, p)
 			}
 			if err := validateAuth(me.Endpoint); err != nil {
 				return nil, fmt.Errorf("vov: route %d (%s): %w", i, p, err)
 			}
+			if err := validateScopes(me.Endpoint); err != nil {
+				return nil, fmt.Errorf("vov: route %d (%s): %w", i, p, err)
+			}
+			scope := resolveScope(me.Endpoint, me.Method, cfg.Scopes)
 			if err := me.Endpoint.Body.Err(); err != nil {
 				return nil, fmt.Errorf("vov: route %d (%s): Body: %w", i, p, err)
 			}
@@ -205,7 +261,7 @@ func NewApp(cfg AppConfig) (*App, error) {
 				return nil, fmt.Errorf("vov: route %d (%s): %w", i, p, err)
 			}
 
-			app.mux.Handle(p, me.Endpoint.wrapped(stack, cfg.Authenticator))
+			app.mux.Handle(p, me.Endpoint.wrapped(stack, cfg.API.Authenticator, scope))
 		}
 		app.routes = append(app.routes, r)
 	}
@@ -220,19 +276,19 @@ func NewApp(cfg AppConfig) (*App, error) {
 		if len(seenTool) == 0 {
 			return nil, fmt.Errorf("vov: AppConfig.MCP is set but no endpoint declares an MCPTool")
 		}
+
+		// Built here, whether or not it is mounted here: a tool schema that
+		// cannot be derived is a bad declaration, and belongs in the same
+		// construction error as every other one rather than surfacing later.
+		h, err := app.buildMCPHandler(cfg.MCP)
+		if err != nil {
+			return nil, fmt.Errorf("vov: building the MCP handler: %w", err)
+		}
+		app.mcpHandler = h
+
 		if cfg.MCP.Path != "" {
 			if cfg.MCP.Path[0] != '/' {
 				return nil, fmt.Errorf("vov: AppConfig.MCP.Path %q must begin with %q", cfg.MCP.Path, "/")
-			}
-			if cfg.MCP.BuildHandler == nil {
-				return nil, fmt.Errorf("vov: AppConfig.MCP.Path is set but BuildHandler is nil (pass mcp.NewHandler)")
-			}
-			h, err := cfg.MCP.BuildHandler(app)
-			if err != nil {
-				return nil, fmt.Errorf("vov: building the MCP handler: %w", err)
-			}
-			if h == nil {
-				return nil, fmt.Errorf("vov: AppConfig.MCP.BuildHandler returned a nil handler")
 			}
 			// Registered like any other route, so it sits inside ServerWrappers
 			// and gets the same recovery and logging as everything else.
@@ -243,7 +299,7 @@ func NewApp(cfg AppConfig) (*App, error) {
 	// Wrap the finished mux. This is the only layer that sees the requests the
 	// mux refuses on its own, so it is what gets served — app.mux is no longer
 	// the whole story once ServerWrappers are set.
-	app.handler = apply(app.mux, cfg.ServerWrappers)
+	app.handler = apply(app.mux, cfg.API.ServerWrappers)
 
 	// Resolve the listen address, then materialize the http.Server vov serves
 	// with. A nil cfg.Server is fine: ToNetHTTPServer treats it as all-defaults.

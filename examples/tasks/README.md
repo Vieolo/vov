@@ -101,7 +101,7 @@ directive in `go.mod`).
   gone but its signed cookie stays valid for 30 days, so the request is refused
   **and** the cookie is cleared on the way out. The same call on the success
   branch is how you rotate a session for sliding expiry.
-- **A seam around the whole handler** — `AppConfig.ServerWrappers` wrap the
+- **A seam around the whole handler** — `APIConfig.ServerWrappers` wrap the
   assembled mux, so it also sees the requests the mux answers *itself*:
 
   | Request | Without the seam | With it |
@@ -158,8 +158,7 @@ directive in `go.mod`).
       Name: "tasks", Version: "0.1.0",
       Instructions: "…",
       Authenticate: makeAuthenticator(cfg.Token),
-      Path:         "/mcp",
-      BuildHandler: mcp.NewHandler,
+      Path: "/mcp",
   },
   ```
 

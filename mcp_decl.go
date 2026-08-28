@@ -2,7 +2,6 @@ package vov
 
 import (
 	"log/slog"
-	"net/http"
 )
 
 // MCPTool declares that an endpoint is callable by an AI assistant over the
@@ -26,10 +25,9 @@ import (
 //	    MCPTool:     &vov.MCPTool{Name: "list_tasks", Description: listTasksDoc},
 //	}
 //
-// Declaring an MCPTool does not by itself serve anything. A protocol package — see
-// the vov/mcp module — reads these declarations and exposes them; vov itself only
-// records that the endpoint is meant to be reachable that way, which is a fact
-// worth having in the manifest whether or not a server is mounted.
+// Declaring an MCPTool does not by itself serve anything: [AppConfig.MCP] is what
+// builds a server. On its own it records that the endpoint is meant to be
+// reachable that way, which is a fact worth having in the manifest either way.
 type MCPTool struct {
 	// Name is what an assistant calls, e.g. "list_tasks". It must be unique
 	// across the app.
@@ -50,9 +48,10 @@ type MCPTool struct {
 // exposes one. It is the app-level half of the declaration; the per-endpoint half
 // is [MCPTool].
 //
-// Setting it does not start anything. It records what the server is called and
-// how a caller is identified, so that the vov/mcp module can build a handler from
-// declarations alone rather than being handed a second copy of them.
+// It records what the server is called and how a caller is identified, so that
+// the handler is built from declarations alone rather than from a second copy of
+// them. Give it a Path and [NewApp] mounts it; otherwise take it from
+// [App.MCPHandler].
 type MCPConfig struct {
 	// Name and Version identify this server to clients. Both are required when
 	// MCPConfig is set.
@@ -74,29 +73,49 @@ type MCPConfig struct {
 	// a different thing from the session cookie a browser sends.
 	//
 	// An app whose tool endpoint honours its ordinary credentials passes the
-	// same function it gave [AppConfig.Authenticator].
+	// same function it gave [APIConfig.Authenticator].
 	Authenticate Authenticator
 
-	// Path is the URL the tool server is served at, e.g. "/mcp". Setting it,
-	// together with BuildHandler, is all it takes: [NewApp] builds the handler
-	// and mounts it, and there is nothing to do afterwards.
+	// Path is the URL the tool server is served at, e.g. "/mcp". Setting it is
+	// all it takes: [NewApp] builds the handler and mounts it, and there is
+	// nothing to do afterwards.
 	//
-	// Leave it empty to mount the handler yourself — build one with the vov/mcp
-	// module and register it wherever you like, which is what an app that wraps
-	// the tool endpoint in its own OAuth gate will want.
+	// Leave it empty to mount the handler yourself — take it from
+	// [App.MCPHandler] and register it wherever you like, which is what an app
+	// that wraps the tool endpoint in its own OAuth gate will want. The handler
+	// is built either way, so a declaration that cannot produce one fails at
+	// construction whichever route is taken.
 	Path string
 
-	// BuildHandler builds the handler served at Path. Pass the vov/mcp module's
-	// constructor:
+	// OnToolCall, if set, is handed a record of every tool call — see [ToolCall].
 	//
-	//	Path: "/mcp", BuildHandler: mcp.NewHandler
+	// It exists because middleware structurally cannot do this job. An endpoint's
+	// middleware sees an invocation but never the tool name, and, more to the
+	// point, never sees the calls that fail before dispatch: a call rejected for
+	// a bad argument reaches no endpoint, so no stack runs for it, and an
+	// assistant looping on an argument it keeps getting wrong is visible here and
+	// nowhere else.
 	//
-	// It is a field rather than something vov calls directly because the protocol
-	// implementation lives in its own module: root vov has no dependencies, and
-	// naming the builder here is what keeps it that way while still leaving the
-	// whole declaration in one place. Required when Path is set, ignored
-	// otherwise.
-	BuildHandler func(*App) (http.Handler, error)
+	// It observes and cannot decide. It returns nothing, and a panic inside it is
+	// recovered, because by the time it runs the endpoint has committed whatever
+	// it was going to commit — an error it could only hand back would be a
+	// complaint about something already done. It runs on the calling goroutine,
+	// so a sink that blocks delays the call; push to a channel if that matters.
+	//
+	// # It is handed raw arguments
+	//
+	// [ToolCall.Arguments] is what the assistant sent, undecoded and
+	// unsummarised. vov cannot summarise it honestly — it does not know which of
+	// an application's fields hold a person's name or the body of a private note
+	// — so it passes them through rather than inventing a redaction that is wrong
+	// in a way nobody notices.
+	//
+	// That makes the sink responsible. A tool call's arguments are user content:
+	// storing them verbatim, or logging them, is one careless line away from
+	// putting private text somewhere it was never meant to go. Record the field
+	// names, or a length, or a hash — record the values only if that is a
+	// decision someone made on purpose.
+	OnToolCall func(ToolCall)
 
 	// Logger, if set, receives protocol-level logging from the tool server.
 	Logger *slog.Logger

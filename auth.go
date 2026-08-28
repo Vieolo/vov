@@ -61,7 +61,14 @@ type User interface {
 // mechanism, on the other branch.
 type AuthResponse struct {
 	header http.Header
+	state  *authState
 }
+
+// authState collects what an [Authenticator] reports about the credential
+// itself, as opposed to about the user it identifies. It is behind a pointer so
+// that the surrounding value type stays copyable while a setter still reaches
+// the caller.
+type authState struct{ scopes []string }
 
 // NewAuthResponse wraps h so that an [Authenticator] can be driven from outside
 // this package — by an in-process caller such as an MCP tool server, or a test.
@@ -73,7 +80,40 @@ func NewAuthResponse(h http.Header) AuthResponse {
 	if h == nil {
 		h = http.Header{}
 	}
-	return AuthResponse{header: h}
+	return AuthResponse{header: h, state: &authState{}}
+}
+
+// SetScopes records the scopes the credential granted, for the endpoint's
+// [Endpoint.ScopeAllOf] to be checked against.
+//
+// It lives here because this is the one place that has read the credential. The
+// [Authenticator] has just parsed a token and knows exactly what it was issued
+// for; nothing later in the request does, and the [User] it returns is the wrong
+// place to put it — a user is the same person whichever key they used, and two
+// tokens for one account routinely carry different scopes.
+//
+// Pass the *effective* set. If an application's "write" implies "read", expand it
+// here: which of its scopes imply which others is a fact about that application's
+// authorization model, and vov comparing strings is what keeps it from having an
+// opinion about them.
+//
+// Not calling this leaves the credential with no scopes, which satisfies no
+// non-empty requirement. That is the fail-closed reading and the intended one: an
+// endpoint declaring a scope has said a bare credential is not enough. A channel
+// with no scope model at all — a browser session, typically — is exempted by
+// naming the channel in [ScopeRule.Modes], not by leaving this uncalled.
+func (a AuthResponse) SetScopes(scopes []string) {
+	if a.state != nil {
+		a.state.scopes = scopes
+	}
+}
+
+// scopes reports what SetScopes recorded.
+func (a AuthResponse) scopes() []string {
+	if a.state == nil {
+		return nil
+	}
+	return a.state.scopes
 }
 
 // Header returns the response headers, for anything [AuthResponse.SetCookie]
@@ -182,7 +222,7 @@ func authorized(u User, roles, permissions []string) bool {
 // It is unexported, and so is the type stored under it, which is the whole
 // point: nothing outside this package can put a value there. Were the guard to
 // trust the public slot that [ContextWithUser] writes, any middleware — or any
-// [AppConfig.ServerWrappers] entry, which runs before routing — could name
+// [APIConfig.ServerWrappers] entry, which runs before routing — could name
 // itself an administrator and skip authentication entirely.
 type invokeUserKey struct{}
 
@@ -190,7 +230,10 @@ type invokeUserKey struct{}
 // distinguishable from its absence even when the principal itself is nil. An
 // anonymous Invoke must be refused by the guard, not quietly handed to the
 // [Authenticator], which has no credentials to read on an in-process call.
-type invokeUser struct{ user User }
+type invokeUser struct {
+	user   User
+	scopes []string
+}
 
 // userContextKey types the request-context slot holding the resolved user.
 type userContextKey struct{}
@@ -230,38 +273,58 @@ func UserFrom(ctx context.Context) (User, bool) {
 //	403  it does, and the answer is no
 //	402  it does, and the answer is yes as soon as you pay
 //
-// 403 never says which role or permission was missing — that would tell an
+// 403 never says which scope, role or permission was missing — that would tell an
 // attacker what to look for. 402 is deliberately distinguishable, because it is
 // not really a denial: it is a price, the client is expected to act on it, and
 // what it discloses ("this resource is paid") is on the pricing page anyway.
 //
-// The order is load-bearing. Roles and permissions are checked before tier, so
-// 402 is returned only when payment is the last remaining barrier. Answering 402
-// to someone who also lacks the required role would send them to a checkout page
-// for access they still would not have.
-func authGuard(next http.Handler, auth Authenticator, e Endpoint) http.Handler {
+// The order is load-bearing:
+//
+//	scopes → roles → permissions → tier
+//
+// Tier is last so that 402 is returned only when payment is the last remaining
+// barrier. Answering 402 to someone who also lacks the required role would send
+// them to a checkout page for access they still would not have.
+//
+// Scopes are first because they settle the question the others cannot: a token
+// not issued for this operation cannot perform it no matter who holds it, so
+// asking what its owner is allowed to do is asking about the wrong thing. It is
+// also the cheapest check — the scopes came off the credential during
+// authentication and are already in memory, while HasRole and HasPermission are
+// where an application is invited to do lazy I/O.
+func authGuard(next http.Handler, auth Authenticator, e Endpoint, sc *scopeCheck) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		var u User
+		var (
+			u      User
+			scopes []string
+		)
 		if iu, vouched := r.Context().Value(invokeUserKey{}).(invokeUser); vouched {
-			// An in-process call from [App.Invoke]. The caller established this
+			// An in-process call from [App.invoke]. The caller established this
 			// identity; there are no credentials on the request to resolve, so
 			// the authenticator is skipped — but every requirement below still
 			// applies, which is what makes a tool call obey the same policy as a
-			// network request.
-			u = iu.user
+			// network request. The grant it vouched for travels the same way.
+			u, scopes = iu.user, iu.scopes
 		} else {
 			// The authenticator gets the headers, not the writer: it may stamp a
 			// Set-Cookie on its way past, and cannot write a response of its own.
+			// It also reports what the credential was issued for.
+			resp := NewAuthResponse(w.Header())
 			var err error
-			u, err = auth(AuthResponse{header: w.Header()}, r)
+			u, err = auth(resp, r)
 			if err != nil {
 				// The lookup broke. Do not report this as a credential problem.
 				http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
 				return
 			}
+			scopes = resp.scopes()
 		}
 		if u == nil || !u.IsAuthenticated() {
 			http.Error(w, http.StatusText(http.StatusUnauthorized), http.StatusUnauthorized)
+			return
+		}
+		if want := sc.requiredIn(ModeFrom(r.Context())); !satisfiedBy(scopes, want) {
+			http.Error(w, http.StatusText(http.StatusForbidden), http.StatusForbidden)
 			return
 		}
 		if !authorized(u, e.RolesAnyOf, e.PermissionsAllOf) {
@@ -272,6 +335,10 @@ func authGuard(next http.Handler, auth Authenticator, e Endpoint) http.Handler {
 			http.Error(w, http.StatusText(http.StatusPaymentRequired), http.StatusPaymentRequired)
 			return
 		}
-		next.ServeHTTP(w, r.WithContext(ContextWithUser(r.Context(), u)))
+		ctx := ContextWithUser(r.Context(), u)
+		if scopes != nil {
+			ctx = contextWithScopes(ctx, scopes)
+		}
+		next.ServeHTTP(w, r.WithContext(ctx))
 	})
 }
