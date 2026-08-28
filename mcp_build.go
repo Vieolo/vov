@@ -173,7 +173,7 @@ func (a *App) toolDispatch(t boundTool, cfg *MCPConfig) func(context.Context, mc
 		call := ToolCall{Tool: t.name, Outcome: ToolOutcomeFailed}
 		defer func() {
 			// Recovery has to happen here, and it is not belt-and-braces on top
-			// of [AppConfig.ServerWrappers]: those cannot reach this. The
+			// of [APIConfig.ServerWrappers]: those cannot reach this. The
 			// protocol SDK dispatches each tool call on a goroutine of its own,
 			// so a wrapper's deferred recover — which sits on the goroutine
 			// serving the HTTP request the call arrived on — never sees the

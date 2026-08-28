@@ -81,9 +81,14 @@ func main() {
 		// Recovery is outermost so it catches panics in everything inside it,
 		// including CORS; CORS sets its headers on the way in, so they survive
 		// on a recovered 500 too.
-		ServerWrappers: []vov.Middleware{
-			recoverPanic(deps.Get().Log),
-			cors(cfg.Origin),
+		// Everything that belongs to the HTTP channel and not to the tool one.
+		// The POST that carries a tool call is wrapped by these — it is an HTTP
+		// request like any other — but the tool call inside it is not.
+		API: vov.APIConfig{
+			ServerWrappers: []vov.Middleware{
+				recoverPanic(deps.Get().Log),
+				cors(cfg.Origin),
+			},
 		},
 		// The middleware combinations this service uses, named once here. Pre
 		// runs outside the auth guard (so it covers rejected requests too); Post
@@ -91,7 +96,7 @@ func main() {
 		MiddlewareStacks: map[string]vov.MiddlewareStack{
 			// requestID and logging sit here so each response says which stack
 			// ran, which is what the smoke suite asserts on. A production app
-			// would hoist both into ServerWrappers instead, so that unrouted
+			// would hoist both into API.ServerWrappers instead, so that unrouted
 			// requests get an id and a log line too.
 			vov.DefaultStackName: {
 				Pre:  []vov.Middleware{requestID, logging},

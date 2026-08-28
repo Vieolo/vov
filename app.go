@@ -46,34 +46,9 @@ type AppConfig struct {
 	// are outside the framework and get no middleware from it.
 	MiddlewareStacks map[string]MiddlewareStack
 
-	// ServerWrappers wrap the whole assembled handler, outermost first, and
-	// therefore see every request the server receives — not only the ones that
-	// reach an endpoint. They wrap in both directions: a wrapper observes the
-	// response on the way out as well as the request on the way in, which is
-	// what makes access logging and panic recovery possible here.
-	//
-	// That is the difference from MiddlewareStacks, and it is not a shade of
-	// meaning. http.ServeMux answers two kinds of request itself, before
-	// dispatching to anything registered: a path no route declares (404), and a
-	// method the matched path does not declare (405). No endpoint middleware
-	// runs for either. A CORS preflight is exactly the second kind — OPTIONS
-	// against a path registered for GET and PATCH — so a cross-origin browser
-	// app cannot work unless something outside the mux answers it.
-	//
-	// The same is true of the things an operator most wants to be unconditional:
-	// panic recovery, request-id stamping, access logging. An unmatched path
-	// that panics or goes unlogged is precisely the request worth a record.
-	//
-	// Because it wraps the mux, it also covers routes registered straight on
-	// [App.Mux]. That is unavoidable rather than chosen: the mux decides its own
-	// 404 internally, so anything that can see that decision is necessarily
-	// outside everything the mux serves.
-	//
-	// A wrapper runs before routing, so it cannot know which endpoint matched:
-	// no path parameters, no AuthMode, no declared roles. It is also invisible to
-	// [Manifest], which documents endpoint policy. Keep authorization out of it —
-	// a rule declared here cannot be reviewed there.
-	ServerWrappers []Middleware
+	// API holds the configuration that applies to requests arriving over HTTP,
+	// and to nothing else — see [APIConfig].
+	API APIConfig
 
 	// Scopes, when set, declares the app-wide scope policy — which channels
 	// enforce scopes, and what an endpoint that names none requires. See
@@ -115,6 +90,62 @@ type AppConfig struct {
 	// default, an explicit value — including 0, meaning "no timeout" — is honored.
 	// Nil means all defaults. See [Server].
 	Server *Server
+}
+
+// APIConfig is the half of an application's configuration that belongs to its
+// HTTP API and not to its tool interface.
+//
+// The split exists because the two channels are not the same request twice. A
+// tool call reaches its endpoint in process, so anything wrapped around the
+// server sees the one HTTP request that carried it and never the call itself —
+// a distinction that used to live in a doc comment and now lives in a type name.
+// [MCPConfig] is the other half, and holds the things with no API counterpart.
+//
+// Routes are deliberately not here. An endpoint answers both channels from one
+// declaration, which is the property in-process dispatch exists to preserve;
+// only the machinery around a request is channel-specific.
+type APIConfig struct {
+	// ServerWrappers wrap the whole assembled handler, outermost first, and
+	// therefore see every request the server receives — not only the ones that
+	// reach an endpoint. They wrap in both directions: a wrapper observes the
+	// response on the way out as well as the request on the way in, which is
+	// what makes access logging and panic recovery possible here.
+	//
+	// That is the difference from MiddlewareStacks, and it is not a shade of
+	// meaning. http.ServeMux answers two kinds of request itself, before
+	// dispatching to anything registered: a path no route declares (404), and a
+	// method the matched path does not declare (405). No endpoint middleware
+	// runs for either. A CORS preflight is exactly the second kind — OPTIONS
+	// against a path registered for GET and PATCH — so a cross-origin browser
+	// app cannot work unless something outside the mux answers it.
+	//
+	// The same is true of the things an operator most wants to be unconditional:
+	// panic recovery, request-id stamping, access logging. An unmatched path
+	// that panics or goes unlogged is precisely the request worth a record.
+	//
+	// Because it wraps the mux, it also covers routes registered straight on
+	// [App.Mux]. That is unavoidable rather than chosen: the mux decides its own
+	// 404 internally, so anything that can see that decision is necessarily
+	// outside everything the mux serves.
+	//
+	// A wrapper runs before routing, so it cannot know which endpoint matched:
+	// no path parameters, no AuthMode, no declared roles. It is also invisible to
+	// [Manifest], which documents endpoint policy. Keep authorization out of it —
+	// a rule declared here cannot be reviewed there.
+	//
+	// # A tool call is not one of these
+	//
+	// The HTTP POST carrying a tool call is wrapped, because it is an HTTP
+	// request like any other — [ModeFrom] reports it as [RequestModeAPI], since
+	// it reaches no endpoint. The tool call inside it is not: that reaches its
+	// endpoint in process, which skips wrappers by design.
+	//
+	// So access logging, request ids and metering fire once per transport
+	// request, not once per call. And panic recovery does not reach a tool
+	// handler at all: the protocol SDK dispatches each call on a goroutine of its
+	// own, where a wrapper's deferred recover cannot see it. vov recovers those
+	// itself and reports them through [MCPConfig.OnToolCall].
+	ServerWrappers []Middleware
 }
 
 // App assembles a set of [Endpoint] declarations onto a standard http.ServeMux,
@@ -259,7 +290,7 @@ func NewApp(cfg AppConfig) (*App, error) {
 	// Wrap the finished mux. This is the only layer that sees the requests the
 	// mux refuses on its own, so it is what gets served — app.mux is no longer
 	// the whole story once ServerWrappers are set.
-	app.handler = apply(app.mux, cfg.ServerWrappers)
+	app.handler = apply(app.mux, cfg.API.ServerWrappers)
 
 	// Resolve the listen address, then materialize the http.Server vov serves
 	// with. A nil cfg.Server is fine: ToNetHTTPServer treats it as all-defaults.

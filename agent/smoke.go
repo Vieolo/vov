@@ -132,6 +132,25 @@ func smoke(root string) int {
 		"tool call audited as mcp") {
 		r.fail("an MCP request was not audited with mode=mcp")
 	}
+	// The transport header reached middleware that runs inside the dispatch.
+	if !r.okf(strings.Contains(log, "id=mcp-trace-42"),
+		"MCP transport header reached the endpoint's middleware") {
+		r.fail("a tool call's headers did not reach the endpoint middleware")
+	}
+	// The tool observer saw a call no endpoint ever ran, and named it.
+	if !r.okf(strings.Contains(log, `tool=get_task outcome=rejected`),
+		"a rejected tool call was observed") {
+		r.fail("a tool call rejected before dispatch was not observed")
+	}
+	// ...and it recorded which arguments were sent without recording their
+	// values. The example's sink keeps the names only, which is the choice vov
+	// leaves to the application precisely because only it knows what is private.
+	namesKept := strings.Contains(log, "tool=create_task") && strings.Contains(log, "args=title")
+	valueLeaked := strings.Contains(log, `tool_call tool=create_task`) &&
+		strings.Contains(log, "from an assistant\" tool=create_task")
+	if !r.okf(namesKept && !valueLeaked, "the observer recorded argument names, not values") {
+		r.fail("the tool observer recorded names=%v leaked_values=%v", namesKept, valueLeaked)
+	}
 	code := srv.ProcessState.ExitCode()
 	hookRan := strings.Contains(log, "tasks_in_memory")
 	if !r.okf(code == 0 && hookRan, "SIGTERM -> exit %d, hook_ran=%v", code, hookRan) {
@@ -349,6 +368,17 @@ func checkMCP(r *report) {
 	r.check("MCP  list_tasks (read-only grant)", isErr, false)
 	isErr, _ = callTool("create_task", map[string]any{"title": "nope"}, tokReadOnly)
 	r.check("MCP  create_task (read-only grant)", isErr, true)
+
+	// A tool call carries the transport's headers into the endpoint, so the
+	// app's ordinary Pre middleware reaches them. This is what a dedicated MCP
+	// enrichment hook would otherwise have been for.
+	isErr, _ = callTool("list_tasks", map[string]any{}, tokMember, header("X-Request-Id", "mcp-trace-42"))
+	r.check("MCP  list_tasks (with a trace header)", isErr, false)
+
+	// A call rejected before dispatch: no endpoint ran, so nothing but the tool
+	// observer can have seen it.
+	isErr, _ = callTool("get_task", map[string]any{}, tokMember)
+	r.check("MCP  get_task (no id, rejected)", isErr, true)
 	// ...and the same narrow credential is unaffected over the HTTP API, which
 	// is the whole point of naming a channel in the rule.
 	r.check("POST /tasks (read-only grant, API)",
@@ -414,12 +444,15 @@ func do(method, path string, opts ...reqOpt) *resp {
 }
 
 // rpc sends one JSON-RPC request to the tool server.
-func rpc(method string, params any, token string) map[string]any {
+func rpc(method string, params any, token string, extra ...reqOpt) map[string]any {
 	payload, _ := json.Marshal(map[string]any{
 		"jsonrpc": "2.0", "id": 1, "method": method, "params": params,
 	})
-	res := do("POST", "/mcp", auth(token), jsonBody(string(payload)),
-		header("Accept", "application/json, text/event-stream"))
+	opts := append([]reqOpt{
+		auth(token), jsonBody(string(payload)),
+		header("Accept", "application/json, text/event-stream"),
+	}, extra...)
+	res := do("POST", "/mcp", opts...)
 	var out map[string]any
 	_ = json.Unmarshal(res.Body, &out)
 	return out
@@ -427,8 +460,8 @@ func rpc(method string, params any, token string) map[string]any {
 
 // callTool invokes one tool and returns whether it reported an error, with its
 // text content.
-func callTool(name string, args map[string]any, token string) (bool, string) {
-	out := rpc("tools/call", map[string]any{"name": name, "arguments": args}, token)
+func callTool(name string, args map[string]any, token string, extra ...reqOpt) (bool, string) {
+	out := rpc("tools/call", map[string]any{"name": name, "arguments": args}, token, extra...)
 	isErr, _ := dig(out, "result", "isError").(bool)
 	content, _ := dig(out, "result", "content").([]any)
 	var text strings.Builder

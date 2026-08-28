@@ -216,7 +216,7 @@ func validateScopes(e Endpoint) error {
 // There is deliberately no exported setter. The guard trusts what it reads here,
 // so the only way in is [AuthResponse.SetScopes] — a seam vov owns and calls
 // itself. Were this writable by application code, any middleware could grant
-// itself a scope, and an [AppConfig.ServerWrappers] entry runs before routing.
+// itself a scope, and an [APIConfig.ServerWrappers] entry runs before routing.
 type scopeContextKey struct{}
 
 // ScopesFrom returns the scopes the request's credential carried, and whether the

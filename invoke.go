@@ -93,7 +93,7 @@ type invokeResult struct {
 // the handler a request missing all of it — and the failure is silent, because
 // the handler still runs.
 //
-// It does not run [AppConfig.ServerWrappers]. Those exist for requests arriving
+// It does not run [APIConfig.ServerWrappers]. Those exist for requests arriving
 // over the network — CORS on an in-process call is meaningless, and a tool
 // invocation is already inside whatever recovery and logging wrapped the request
 // that triggered it. Dispatch goes through [App.Mux], which is the same

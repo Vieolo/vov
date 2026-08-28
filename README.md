@@ -14,8 +14,11 @@ app, err := vov.NewApp(vov.AppConfig{
     Address:       ":8080",
     Authenticator: authenticate,
 
-    // Wraps everything, including the 404s and 405s the mux answers itself.
-    ServerWrappers: []vov.Middleware{recoverPanic(log), cors(origin)},
+    // Wraps every HTTP request, including the 404s and 405s the mux answers
+    // itself. Channel-scoped: a tool call inside a request is not wrapped.
+    API: vov.APIConfig{
+        ServerWrappers: []vov.Middleware{recoverPanic(log), cors(origin)},
+    },
 
     // Named middleware combinations, split by the auth seam.
     MiddlewareStacks: map[string]vov.MiddlewareStack{
@@ -61,7 +64,7 @@ the declaration, so they move with it and stay green.
 | **Routing** | One `Route` per URL, methods as named fields — `GET`, `POST`, … A URL declared twice is a construction error. |
 | **Auth** | Authenticated by default; `AuthModeNone` opts out. `RolesAnyOf` (any-of), `PermissionsAllOf` (all-of), `MinTier` (paid, refuses **402** not 403). |
 | **Scopes** | `ScopeAllOf` gates on what the *credential* was issued for, not what its owner may do — the OAuth axis. Declared per channel, so tokens can govern your MCP tools while browser sessions stay untouched, and the two can differ. Defaults key on method, so a new endpoint is governed the moment it exists. |
-| **Middleware** | Named stacks per endpoint, split `Pre`/`Post` around the auth seam; `ServerWrappers` for everything the server receives. |
+| **Middleware** | Named stacks per endpoint, split `Pre`/`Post` around the auth seam; `API.ServerWrappers` for every HTTP request the server receives. |
 | **Config** | `LoadEnv` binds env vars onto your struct — required fields, defaults, every problem reported at once, and never a value in an error message. |
 | **Shared objects** | `Global[T]`, a typed write-once holder, so handlers keep the plain `net/http` signature. |
 | **Lifecycle** | `Run` handles binding, SIGINT/SIGTERM, draining, and `OnShutdown` hooks. |

@@ -222,7 +222,7 @@ func authorized(u User, roles, permissions []string) bool {
 // It is unexported, and so is the type stored under it, which is the whole
 // point: nothing outside this package can put a value there. Were the guard to
 // trust the public slot that [ContextWithUser] writes, any middleware — or any
-// [AppConfig.ServerWrappers] entry, which runs before routing — could name
+// [APIConfig.ServerWrappers] entry, which runs before routing — could name
 // itself an administrator and skip authentication entirely.
 type invokeUserKey struct{}
 
