@@ -132,7 +132,7 @@ directive in `go.mod`).
   DELETE  /tasks/{id}    auth:required  stack:default  roles-any:admin|owner  perms-all:tasks.write
   ```
 
-  `python3 agent.py manifest` fails if the code and the file disagree. That is
+  `go -C agent run . manifest` fails if the code and the file disagree. That is
   the whole point: make `GET /tasks/{id}` public and `verify` and `smoke` both
   stay green, because no test asserts a property nobody thought to assert — but
   the manifest shows a changed line.
