@@ -15,10 +15,16 @@ import (
 // honest and fail-closed: an endpoint that later requires one is refused rather
 // than accidentally opened.
 //
-// Every method is called on the user its [Authenticator] returned, once per
-// request. A model whose answers need I/O — a paid-until check, a permission
-// table — should resolve them while it is being built and answer from memory, so
-// a route requiring two permissions does not become two queries.
+// vov asks only what the matched endpoint declares: HasRole only when the
+// endpoint lists roles, HasPermission once per listed permission, Tier only when
+// it sets MinTier. An endpoint that declares none of them costs none of them.
+//
+// So an answer that needs I/O — a paid-until lookup, a permission table — can be
+// resolved lazily on first call and cached for the rest of the request. Prefer
+// that to resolving everything in the [Authenticator]: the Authenticator is not
+// told which endpoint matched, so work done there is paid on every authenticated
+// request whether the endpoint consults it or not. Do cache, though — a route
+// listing two permissions asks twice.
 type User interface {
 	// IsAuthenticated reports whether the request carries a valid principal.
 	IsAuthenticated() bool
@@ -55,6 +61,19 @@ type User interface {
 // mechanism, on the other branch.
 type AuthResponse struct {
 	header http.Header
+}
+
+// NewAuthResponse wraps h so that an [Authenticator] can be driven from outside
+// this package — by an in-process caller such as an MCP tool server, or a test.
+//
+// Pass the header of the response the call will produce. Passing a throwaway
+// header is valid and means any header the authenticator sets is discarded,
+// which is the honest thing to do when there is no response to put it on.
+func NewAuthResponse(h http.Header) AuthResponse {
+	if h == nil {
+		h = http.Header{}
+	}
+	return AuthResponse{header: h}
 }
 
 // Header returns the response headers, for anything [AuthResponse.SetCookie]
@@ -157,6 +176,22 @@ func authorized(u User, roles, permissions []string) bool {
 	return true
 }
 
+// invokeUserKey types the request-context slot [App.Invoke] uses to hand the
+// guard a principal it has already resolved.
+//
+// It is unexported, and so is the type stored under it, which is the whole
+// point: nothing outside this package can put a value there. Were the guard to
+// trust the public slot that [ContextWithUser] writes, any middleware — or any
+// [AppConfig.ServerWrappers] entry, which runs before routing — could name
+// itself an administrator and skip authentication entirely.
+type invokeUserKey struct{}
+
+// invokeUser wraps the vouched-for principal so that its presence is
+// distinguishable from its absence even when the principal itself is nil. An
+// anonymous Invoke must be refused by the guard, not quietly handed to the
+// [Authenticator], which has no credentials to read on an in-process call.
+type invokeUser struct{ user User }
+
 // userContextKey types the request-context slot holding the resolved user.
 type userContextKey struct{}
 
@@ -178,7 +213,7 @@ func UserFrom(ctx context.Context) (User, bool) {
 }
 
 // authGuard wraps next so that it runs only for a request whose user is
-// authenticated and satisfies the endpoint's [AuthMod], and stashes that user in
+// authenticated and satisfies the endpoint's [AuthMode], and stashes that user in
 // the request context.
 //
 // It is applied inside the endpoint's middleware chain and outside the handler.
@@ -206,13 +241,24 @@ func UserFrom(ctx context.Context) (User, bool) {
 // for access they still would not have.
 func authGuard(next http.Handler, auth Authenticator, e Endpoint) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		// The authenticator gets the headers, not the writer: it may stamp a
-		// Set-Cookie on its way past, and cannot write a response of its own.
-		u, err := auth(AuthResponse{header: w.Header()}, r)
-		if err != nil {
-			// The lookup broke. Do not report this as a credential problem.
-			http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
-			return
+		var u User
+		if iu, vouched := r.Context().Value(invokeUserKey{}).(invokeUser); vouched {
+			// An in-process call from [App.Invoke]. The caller established this
+			// identity; there are no credentials on the request to resolve, so
+			// the authenticator is skipped — but every requirement below still
+			// applies, which is what makes a tool call obey the same policy as a
+			// network request.
+			u = iu.user
+		} else {
+			// The authenticator gets the headers, not the writer: it may stamp a
+			// Set-Cookie on its way past, and cannot write a response of its own.
+			var err error
+			u, err = auth(AuthResponse{header: w.Header()}, r)
+			if err != nil {
+				// The lookup broke. Do not report this as a credential problem.
+				http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+				return
+			}
 		}
 		if u == nil || !u.IsAuthenticated() {
 			http.Error(w, http.StatusText(http.StatusUnauthorized), http.StatusUnauthorized)

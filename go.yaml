@@ -1,6 +1,6 @@
 name: vov
 description: Battery-included declarative Go backend framework
-version: 0.2.0
+version: 0.2.1
 schema_version: 0
 repository: https://github.com/vieolo/vov
 issue_tracker: https://github.com/vieolo/vov/issues
@@ -8,8 +8,11 @@ license: "MIT"
 external:
   gomore:
     commands:
-      # Deterministic build + vet + test across every module (see agent.py).
-      verify: python3 agent.py verify
+      # Deterministic development checks, all in Go — see agent/.
+      verify: go -C agent run . verify
+      manifest: go -C agent run . manifest
+      smoke: go -C agent run . smoke
+      check: go -C agent run . all
   contour:
     # the central store profiles whose rules load eagerly here.
     # List more than one to combine entry points — [python, cli] for a Python
