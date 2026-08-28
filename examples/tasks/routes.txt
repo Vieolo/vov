@@ -12,7 +12,6 @@
 
 GET     /healthz                       auth:none  stack:bare
 GET     /reports                       auth:required  stack:default  roles-any:member  min-tier:2  mcp-tool:get_reports
-GET     /summary                       auth:required  stack:default
 GET     /tasks                         auth:required  stack:default  query:listTasksQuery  mcp-tool:list_tasks
 POST    /tasks                         auth:required  stack:json  perms-all:tasks.write  body:createTaskInput  mcp-tool:create_task
 GET     /tasks/{id}                    auth:required  stack:default  mcp-tool:get_task

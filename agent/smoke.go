@@ -123,7 +123,7 @@ func smoke(root string) int {
 		r.fail("a handler did not reach its globals")
 	}
 	// The audit trail tells the two channels apart.
-	if !r.okf(strings.Contains(log, "path=/summary") && strings.Contains(log, "mode=api"),
+	if !r.okf(strings.Contains(log, "path=/reports") && strings.Contains(log, "mode=api"),
 		"API call audited as api") {
 		r.fail("an API request was not audited with mode=api")
 	}
@@ -200,19 +200,10 @@ func checkEndpoints(r *report) {
 	r.check("GET  /reports (right role, unpaid)", do("GET", "/reports", auth(tokReader)).Status, 402)
 	r.check("GET  /reports (paid tier 2)", do("GET", "/reports", auth(tokPro)).Status, 200)
 
-	// --- in-process dispatch (App.Invoke) ------------------------------------
-	res = do("GET", "/summary", auth(tokReader))
-	r.check("GET  /summary (unpaid caller)", res.Status, 200)
-	r.check("     inner /reports refused 402", res.field("reports_status"), float64(402))
-
-	res = do("GET", "/summary", auth(tokPro))
-	r.check("GET  /summary (paid caller)", res.Status, 200)
-	r.check("     inner /reports allowed", res.field("reports_status"), float64(200))
-	r.check("     outer call audited as api", res.Header.Get("X-Audit-Mode"), "api")
-	// The channel a dispatch answers for is the caller's to name, and the same
-	// call site names either one — the mechanism is identical, the mode is not.
-	r.check("     inner call answering for mcp", res.field("reports_mode"), "mcp")
-	r.check("     inner call answering for api", res.field("reports_mode_api"), "api")
+	// In-process dispatch is exercised by the MCP section below, which is the
+	// only channel that reaches App.Invoke. The mode a dispatch carries is a unit
+	// test's job — see invoke_test.go — since nothing about it needs a subprocess.
+	r.check("GET  /reports audited as api", do("GET", "/reports", auth(tokPro)).Header.Get("X-Audit-Mode"), "api")
 
 	// --- one URL, several methods -------------------------------------------
 	r.check("DEL  /tasks/1 (admin)", do("DELETE", "/tasks/1", auth(tokAdmin)).Status, 204)

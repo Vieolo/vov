@@ -143,7 +143,6 @@ func main() {
 			{Path: "/tasks", Endpoints: collectionEndpoints()},
 			{Path: "/tasks/{id}", Endpoints: itemEndpoints()},
 			{Path: "/reports", Endpoints: reportEndpoints()},
-			{Path: "/summary", Endpoints: summaryEndpoints()},
 			{Path: "/webhook", Endpoints: webhookEndpoints()},
 		},
 	})
@@ -320,41 +319,6 @@ func reportEndpoints() vov.Endpoints {
 	}
 }
 
-// summaryEndpoints serves /summary by calling another endpoint in process
-// instead of reaching into the store, which is what a tool call does.
-//
-// The caller's own identity is passed to Invoke, so /reports enforces its role
-// and tier requirements against them: an unpaid user sees the 402 the paywall
-// would have given them directly, rather than being handed data through a side
-// door. That property is the reason a tool should dispatch to its endpoint
-// rather than reimplement it.
-func summaryEndpoints() vov.Endpoints {
-	return vov.Endpoints{
-		GET: vov.Endpoint{
-			Handler: func(w http.ResponseWriter, r *http.Request) {
-				u, _ := vov.UserFrom(r.Context())
-				res, err := application.Get().Invoke(r.Context(), vov.InvokeRequest{
-					Method: http.MethodGet,
-					Path:   "/reports",
-					User:   u,
-				})
-				if err != nil {
-					writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "dispatch failed"})
-					return
-				}
-				// The inner body is JSON when /reports answers and plain text
-				// when the guard refuses it, since vov writes refusals with
-				// http.Error. A caller relaying an inner response — an MCP tool,
-				// say — has to cope with both.
-				writeJSON(w, http.StatusOK, map[string]any{
-					"reports_status": res.Status,
-					"reports_body":   strings.TrimSpace(string(res.Body)),
-				})
-			},
-		},
-	}
-}
-
 // webhookEndpoints serves /webhook: authenticated by signature rather than by
 // user, so it opts out of auth and takes the stack that checks the signature.
 func webhookEndpoints() vov.Endpoints {
@@ -450,9 +414,9 @@ func logging(next http.Handler) http.Handler {
 // reason the after-auth phase exists: it needs the user, so it cannot run in the
 // outer stack, which executes before anyone has been authenticated.
 //
-// Recording the mode is the legitimate use of it — this row is how a tool call
-// and a browser call get told apart afterwards. Nothing here branches on it, and
-// nothing downstream should: see vov.RequestMode.
+// Recording the mode is what this row is for: it is how a tool call and a
+// browser call get told apart afterwards. An application may also shape a
+// response by it — see vov.RequestMode for where that stops.
 func auditLog(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		u := currentUser(r)
