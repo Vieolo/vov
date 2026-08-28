@@ -140,7 +140,8 @@ func (a *App) toolDispatch(method string, cfg *MCPConfig) func(context.Context, 
 		// failure here is a dispatch failure, not a refusal: the assistant cannot
 		// fix a broken token store by rephrasing.
 		hr := (&http.Request{Header: in.Header}).WithContext(ctx)
-		user, err := cfg.Authenticate(NewAuthResponse(in.RespHeader), hr)
+		resp := NewAuthResponse(in.RespHeader)
+		user, err := cfg.Authenticate(resp, hr)
 		if err != nil {
 			return mcpsrv.Result{}, fmt.Errorf("resolving the caller: %w", err)
 		}
@@ -151,6 +152,10 @@ func (a *App) toolDispatch(method string, cfg *MCPConfig) func(context.Context, 
 			Query:  in.Query,
 			Body:   in.Body,
 			User:   user,
+			// The guard skips the authenticator for a vouched call, so what it
+			// reported about the credential has to travel with the identity it
+			// reported it alongside.
+			Scopes: resp.scopes(),
 			// This is the MCP channel, so this is the thing that knows to say so.
 			// Dispatching in process is how a tool call reaches its endpoint, not
 			// what the call is.

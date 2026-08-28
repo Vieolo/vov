@@ -110,6 +110,25 @@ func main() {
 			// Deliberately nothing. A health check should not depend on any of it.
 			"bare": {},
 		},
+		// Scopes govern the MCP channel and nothing else, which is the whole
+		// reason ScopeRule carries a mode: this app's tokens are issued by its
+		// OAuth server for assistants, and a browser session has no scope at
+		// all. Enforcing these on the HTTP API would refuse every browser call.
+		//
+		// ByMethod is what keeps it from being a thing to remember: a new
+		// mutating endpoint is governed the moment it exists, and one that is
+		// not covered here fails NewApp rather than shipping unscoped.
+		Scopes: &vov.ScopePolicy{
+			Modes: []vov.RequestMode{vov.RequestModeMCP},
+			ByMethod: map[string][]string{
+				http.MethodGet:    {"tasks:read"},
+				http.MethodHead:   {"tasks:read"},
+				http.MethodPost:   {"tasks:write"},
+				http.MethodPut:    {"tasks:write"},
+				http.MethodPatch:  {"tasks:write"},
+				http.MethodDelete: {"tasks:write"},
+			},
+		},
 		// The tool server. It names itself and says how a tool caller is
 		// identified — and nothing else, because which endpoints are exposed is
 		// declared on the endpoints themselves.
@@ -243,22 +262,38 @@ func makeAuthenticator(valid string) vov.Authenticator {
 			})
 			return nil, nil // -> 401, with the cookie cleared on the way out
 		case token == valid:
-			// An ordinary member: may write tasks, but is not an admin.
+			// An ordinary member: may write tasks, but is not an admin. A full
+			// grant, so the scope rules below never bite for this credential.
+			resp.SetScopes([]string{"tasks:read", "tasks:write"})
 			return &user{name: "ramtin", roles: []string{"member"}, perms: []string{"tasks.write"}}, nil
 		case token == valid+"-admin":
+			resp.SetScopes([]string{"tasks:read", "tasks:write"})
 			return &user{name: "admin", roles: []string{"member", "admin"}, perms: []string{"tasks.write"}}, nil
 		case token == valid+"-owner":
+			resp.SetScopes([]string{"tasks:read", "tasks:write"})
 			// The second of DELETE's any-of roles: also allowed.
 			return &user{name: "owner", roles: []string{"owner"}, perms: []string{"tasks.write"}}, nil
 		case token == valid+"-halfadmin":
+			resp.SetScopes([]string{"tasks:read", "tasks:write"})
 			// Holds the role but not the permission. DELETE needs both, so this
 			// is the case a roles-or-permissions design could not express.
 			return &user{name: "halfadmin", roles: []string{"admin"}}, nil
 		case token == valid+"-pro":
+			resp.SetScopes([]string{"tasks:read", "tasks:write"})
 			// A paying member: the only one who gets past /reports.
 			return &user{name: "pro", roles: []string{"member"}, perms: []string{"tasks.write"}, tier: 2}, nil
+		case token == valid+"-readonly":
+			// The scope axis, in one case. Same person and same permissions as
+			// the ordinary member above — a *different key*, cut for reading
+			// only. No permission model can express this: the principal is
+			// identical, and it is the credential that is narrower.
+			resp.SetScopes([]string{"tasks:read"})
+			return &user{name: "ramtin", roles: []string{"member"}, perms: []string{"tasks.write"}}, nil
 		case token == valid+"-reader":
-			// Authenticated, but holds no write permission: 403, never 401.
+			// Authenticated, but holds no write permission: 403, never 401. A
+			// full grant, so what refuses this one is the permission model and
+			// not the credential — the two axes stay separable in the tests.
+			resp.SetScopes([]string{"tasks:read", "tasks:write"})
 			return &user{name: "reader", roles: []string{"member"}}, nil
 		default:
 			return nil, nil

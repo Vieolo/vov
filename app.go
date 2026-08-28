@@ -75,6 +75,16 @@ type AppConfig struct {
 	// a rule declared here cannot be reviewed there.
 	ServerWrappers []Middleware
 
+	// Scopes, when set, declares the app-wide scope policy — which channels
+	// enforce scopes, and what an endpoint that names none requires. See
+	// [ScopePolicy].
+	//
+	// Setting it makes scopes mandatory to think about: any endpoint reachable on
+	// an enforced channel that resolves no requirement is a construction error,
+	// so a new endpoint cannot be added unscoped by accident. [ScopeNone] is how
+	// one opts out on purpose.
+	Scopes *ScopePolicy
+
 	// Authenticator resolves the user a request acts as. Endpoints require an
 	// authenticated user unless they declare [AuthModeNone], so this is required
 	// unless every endpoint opts out — [NewApp] rejects a configuration that
@@ -94,9 +104,9 @@ type AppConfig struct {
 	// exposes — see [MCPConfig]. The endpoints it exposes are the ones declaring
 	// an [MCPTool]; nothing is restated here.
 	//
-	// Setting it does not serve anything by itself. The vov/mcp module builds a
-	// handler from this and the declarations, which the app mounts where it
-	// likes.
+	// Setting it is enough to serve one: give it a Path and [NewApp] builds the
+	// handler from this and the declarations and mounts it. An app that would
+	// rather mount it itself takes it from [App.MCPHandler].
 	MCP *MCPConfig
 
 	// Server optionally tunes the http.Server vov serves with — timeouts, TLS,
@@ -114,6 +124,7 @@ type AppConfig struct {
 type App struct {
 	mcp             *MCPConfig
 	mcpHandler      http.Handler // built when MCP is declared; see App.MCPHandler
+	scopes          *ScopePolicy
 	mux             *http.ServeMux
 	handler         http.Handler // mux wrapped in ServerWrappers; what is served
 	server          *http.Server
@@ -133,6 +144,7 @@ type App struct {
 func NewApp(cfg AppConfig) (*App, error) {
 	app := &App{
 		mcp:             cfg.MCP,
+		scopes:          cfg.Scopes,
 		mux:             http.NewServeMux(),
 		shutdownTimeout: cfg.ShutdownTimeout,
 	}
@@ -182,6 +194,13 @@ func NewApp(cfg AppConfig) (*App, error) {
 			if err := validateAuth(me.Endpoint); err != nil {
 				return nil, fmt.Errorf("vov: route %d (%s): %w", i, p, err)
 			}
+			if err := validateScopes(me.Endpoint); err != nil {
+				return nil, fmt.Errorf("vov: route %d (%s): %w", i, p, err)
+			}
+			scope := resolveScope(me.Endpoint, me.Method, cfg.Scopes)
+			if err := requireScopeDecision(me.Endpoint, scope, cfg.Scopes); err != nil {
+				return nil, fmt.Errorf("vov: route %d (%s): %w", i, p, err)
+			}
 			if err := me.Endpoint.Body.Err(); err != nil {
 				return nil, fmt.Errorf("vov: route %d (%s): Body: %w", i, p, err)
 			}
@@ -206,7 +225,7 @@ func NewApp(cfg AppConfig) (*App, error) {
 				return nil, fmt.Errorf("vov: route %d (%s): %w", i, p, err)
 			}
 
-			app.mux.Handle(p, me.Endpoint.wrapped(stack, cfg.Authenticator))
+			app.mux.Handle(p, me.Endpoint.wrapped(stack, cfg.Authenticator, scope))
 		}
 		app.routes = append(app.routes, r)
 	}

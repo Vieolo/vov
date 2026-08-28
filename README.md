@@ -47,7 +47,7 @@ lives in a closure, and closures do not diff. Written as data it can be rendered
 
 ```
 GET     /investors     auth:required  stack:default  min-tier:1
-POST    /investors     auth:required  stack:default  roles-any:admin
+POST    /investors     auth:required  stack:default  scopes-all:write@mcp  roles-any:admin
 ```
 
 Check that file in and a loosened policy becomes a changed line in a pull
@@ -60,6 +60,7 @@ the declaration, so they move with it and stay green.
 |---|---|
 | **Routing** | One `Route` per URL, methods as named fields — `GET`, `POST`, … A URL declared twice is a construction error. |
 | **Auth** | Authenticated by default; `AuthModeNone` opts out. `RolesAnyOf` (any-of), `PermissionsAllOf` (all-of), `MinTier` (paid, refuses **402** not 403). |
+| **Scopes** | `ScopeAllOf` gates on what the *credential* was issued for, not what its owner may do — the OAuth axis. Per-channel, so tokens can govern your MCP tools while browser sessions are untouched. A policy default keeps new endpoints governed, and an uncovered one fails `NewApp`. |
 | **Middleware** | Named stacks per endpoint, split `Pre`/`Post` around the auth seam; `ServerWrappers` for everything the server receives. |
 | **Config** | `LoadEnv` binds env vars onto your struct — required fields, defaults, every problem reported at once, and never a value in an error message. |
 | **Shared objects** | `Global[T]`, a typed write-once holder, so handlers keep the plain `net/http` signature. |

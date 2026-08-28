@@ -12,9 +12,13 @@ import (
 const manifestHeader = `# vov route manifest — every endpoint this app declares, and who may reach it.
 # Regenerate whenever a route declaration changes; review the diff.
 #
-#   METHOD  PATH  auth:<mode>  stack:<name>  [roles-any:a|b]  [perms-all:x,y]
-#                 [min-tier:N]  [query:Type]  [body:Type]  [mcp-tool:name]
+#   METHOD  PATH  auth:<mode>  stack:<name>  [scopes-all:x,y@modes]
+#                 [roles-any:a|b]  [perms-all:x,y]  [min-tier:N]
+#                 [query:Type]  [body:Type]  [mcp-tool:name]
 #
+# scopes-all requires EVERY listed scope of the CREDENTIAL, on the channels
+#            after the @ — a delegated token may hold fewer scopes than its
+#            owner has permissions. Shown whether declared or defaulted.
 # roles-any  is satisfied by ANY one of the listed roles       (| reads as "or")
 # perms-all  requires EVERY one of the listed permissions      (, reads as "and")
 # min-tier   requires User.Tier() >= N; refused with 402, not 403
@@ -50,7 +54,7 @@ const (
 //
 // The manifest covers declared routes only. Anything registered straight on
 // [App.Mux] is outside the framework and cannot appear here.
-func Manifest(routes []Route) string {
+func Manifest(routes []Route, scopes *ScopePolicy) string {
 	sorted := slices.Clone(routes)
 	sort.SliceStable(sorted, func(i, j int) bool { return sorted[i].Path < sorted[j].Path })
 
@@ -58,7 +62,7 @@ func Manifest(routes []Route) string {
 	b.WriteString(manifestHeader)
 	for _, r := range sorted {
 		for _, me := range r.Endpoints.declared() {
-			b.WriteString(manifestLine(r.Path, me))
+			b.WriteString(manifestLine(r.Path, me, scopes))
 			b.WriteByte('\n')
 		}
 	}
@@ -66,7 +70,7 @@ func Manifest(routes []Route) string {
 }
 
 // manifestLine renders one endpoint.
-func manifestLine(path string, me methodEndpoint) string {
+func manifestLine(path string, me methodEndpoint, policy *ScopePolicy) string {
 	method := me.Method
 	if method == "" {
 		method = "ANY" // declared under Endpoints.Any: no method restriction
@@ -87,6 +91,20 @@ func manifestLine(path string, me methodEndpoint) string {
 	fields := []string{
 		fmt.Sprintf("auth:%s", mode),
 		fmt.Sprintf("stack:%s", stack),
+	}
+	// The effective scope requirement, defaulted rule included: "which endpoints
+	// a read-only grant cannot reach" is the question this column exists to
+	// answer, and it is the derived ones a reviewer is least likely to know.
+	if sc := resolveScope(me.Endpoint, me.Method, policy); sc != nil && len(sc.allOf) > 0 {
+		field := "scopes-all:" + strings.Join(sc.allOf, ",")
+		if sc.modes != nil {
+			labels := make([]string, len(sc.modes))
+			for i, m := range sc.modes {
+				labels[i] = string(m)
+			}
+			field += "@" + strings.Join(labels, "|")
+		}
+		fields = append(fields, field)
 	}
 	if roles := me.Endpoint.RolesAnyOf; len(roles) > 0 {
 		fields = append(fields, "roles-any:"+strings.Join(roles, "|"))
@@ -127,13 +145,12 @@ func (a *App) Routes() []Route {
 }
 
 // MCP returns the app's Model Context Protocol declaration, or nil when it has
-// none. It is how the vov/mcp module reads what to serve; applications rarely
-// need it.
+// none. Applications rarely need it.
 func (a *App) MCP() *MCPConfig {
 	return a.mcp
 }
 
 // Manifest renders the app's routes — see [Manifest].
 func (a *App) Manifest() string {
-	return Manifest(a.routes)
+	return Manifest(a.routes, a.scopes)
 }

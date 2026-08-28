@@ -49,6 +49,12 @@ type invokeRequest struct {
 	// that means one channel by omission is a channel nobody decided on.
 	Mode RequestMode
 
+	// Scopes are the scopes the caller's credential granted, checked against
+	// the endpoint's [Endpoint.ScopeAllOf] exactly as a network request's are.
+	// Vouched for on the same terms as User: whoever established the identity
+	// established what its key was cut for.
+	Scopes []string
+
 	// User is the principal the call acts as, already resolved.
 	//
 	// invoke does not authenticate: it takes this user's identity on trust,
@@ -153,7 +159,7 @@ func (a *App) invoke(ctx context.Context, req invokeRequest) (invokeResult, erro
 	// Vouch for the user, and tag the channel. Both keys are unexported, so
 	// nothing outside this package can forge either — which is what keeps the
 	// guard's trust in the first one safe, and the second one worth metering on.
-	ictx := context.WithValue(hr.Context(), invokeUserKey{}, invokeUser{user: req.User})
+	ictx := context.WithValue(hr.Context(), invokeUserKey{}, invokeUser{user: req.User, scopes: req.Scopes})
 	hr = hr.WithContext(withMode(ictx, req.Mode))
 
 	rec := &captureWriter{header: make(http.Header)}
