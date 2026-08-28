@@ -9,6 +9,7 @@
 
 GET     /healthz                       auth:none  stack:bare
 GET     /reports                       auth:required  stack:default  roles-any:member  min-tier:2
+GET     /summary                       auth:required  stack:default
 GET     /tasks                         auth:required  stack:default
 POST    /tasks                         auth:required  stack:json  perms-all:tasks.write
 GET     /tasks/{id}                    auth:required  stack:default

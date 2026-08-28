@@ -18,6 +18,12 @@ import (
 // is a construction error rather than a panic in production.
 var deps = vov.NewGlobal[*Deps]()
 
+// application holds the built app, so a handler can dispatch to another endpoint
+// in process with vov.Invoke. It cannot be listed in AppConfig.RequireGlobals:
+// the app does not exist until NewApp returns, so this one is necessarily set
+// after the check that RequireGlobals performs.
+var application = vov.NewGlobal[*vov.App]()
+
 // Deps holds what the handlers share. vov never looks inside it.
 type Deps struct {
 	Log   *slog.Logger

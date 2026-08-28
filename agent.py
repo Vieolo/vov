@@ -264,6 +264,18 @@ def smoke() -> int:
             status, _, _ = _http("/reports", headers=PRO_HDR)
             check("GET  /reports (paid tier 2)", status, 200)
 
+            # --- in-process dispatch (App.Invoke) ----------------------------
+            # /summary answers by invoking /reports as the calling user, so the
+            # paywall applies to the inner call: an unpaid caller sees the 402
+            # rather than being handed the data through a side door.
+            status, _, body = _http("/summary", headers=READER_HDR)
+            check("GET  /summary (unpaid caller)", status, 200)
+            check("     inner /reports refused 402", json.loads(body).get("reports_status"), 402)
+
+            status, _, body = _http("/summary", headers=PRO_HDR)
+            check("GET  /summary (paid caller)", status, 200)
+            check("     inner /reports allowed", json.loads(body).get("reports_status"), 200)
+
             # --- one URL, several methods ------------------------------------
             # /tasks/{id} declares GET and DELETE in a single Route.
             status, _, _ = _http("/tasks/1", "DELETE", headers=ADMIN_HDR)

@@ -163,6 +163,22 @@ func authorized(u User, roles, permissions []string) bool {
 	return true
 }
 
+// invokeUserKey types the request-context slot [App.Invoke] uses to hand the
+// guard a principal it has already resolved.
+//
+// It is unexported, and so is the type stored under it, which is the whole
+// point: nothing outside this package can put a value there. Were the guard to
+// trust the public slot that [ContextWithUser] writes, any middleware — or any
+// [AppConfig.ServerWrappers] entry, which runs before routing — could name
+// itself an administrator and skip authentication entirely.
+type invokeUserKey struct{}
+
+// invokeUser wraps the vouched-for principal so that its presence is
+// distinguishable from its absence even when the principal itself is nil. An
+// anonymous Invoke must be refused by the guard, not quietly handed to the
+// [Authenticator], which has no credentials to read on an in-process call.
+type invokeUser struct{ user User }
+
 // userContextKey types the request-context slot holding the resolved user.
 type userContextKey struct{}
 
@@ -212,13 +228,24 @@ func UserFrom(ctx context.Context) (User, bool) {
 // for access they still would not have.
 func authGuard(next http.Handler, auth Authenticator, e Endpoint) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		// The authenticator gets the headers, not the writer: it may stamp a
-		// Set-Cookie on its way past, and cannot write a response of its own.
-		u, err := auth(AuthResponse{header: w.Header()}, r)
-		if err != nil {
-			// The lookup broke. Do not report this as a credential problem.
-			http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
-			return
+		var u User
+		if iu, vouched := r.Context().Value(invokeUserKey{}).(invokeUser); vouched {
+			// An in-process call from [App.Invoke]. The caller established this
+			// identity; there are no credentials on the request to resolve, so
+			// the authenticator is skipped — but every requirement below still
+			// applies, which is what makes a tool call obey the same policy as a
+			// network request.
+			u = iu.user
+		} else {
+			// The authenticator gets the headers, not the writer: it may stamp a
+			// Set-Cookie on its way past, and cannot write a response of its own.
+			var err error
+			u, err = auth(AuthResponse{header: w.Header()}, r)
+			if err != nil {
+				// The lookup broke. Do not report this as a credential problem.
+				http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+				return
+			}
 		}
 		if u == nil || !u.IsAuthenticated() {
 			http.Error(w, http.StatusText(http.StatusUnauthorized), http.StatusUnauthorized)
