@@ -1,5 +1,10 @@
 package vov
 
+import (
+	"log/slog"
+	"net/http"
+)
+
 // MCPTool declares that an endpoint is callable by an AI assistant over the
 // Model Context Protocol.
 //
@@ -71,4 +76,28 @@ type MCPConfig struct {
 	// An app whose tool endpoint honours its ordinary credentials passes the
 	// same function it gave [AppConfig.Authenticator].
 	Authenticate Authenticator
+
+	// Path is the URL the tool server is served at, e.g. "/mcp". Setting it,
+	// together with BuildHandler, is all it takes: [NewApp] builds the handler
+	// and mounts it, and there is nothing to do afterwards.
+	//
+	// Leave it empty to mount the handler yourself — build one with the vov/mcp
+	// module and register it wherever you like, which is what an app that wraps
+	// the tool endpoint in its own OAuth gate will want.
+	Path string
+
+	// BuildHandler builds the handler served at Path. Pass the vov/mcp module's
+	// constructor:
+	//
+	//	Path: "/mcp", BuildHandler: mcp.NewHandler
+	//
+	// It is a field rather than something vov calls directly because the protocol
+	// implementation lives in its own module: root vov has no dependencies, and
+	// naming the builder here is what keeps it that way while still leaving the
+	// whole declaration in one place. Required when Path is set, ignored
+	// otherwise.
+	BuildHandler func(*App) (http.Handler, error)
+
+	// Logger, if set, receives protocol-level logging from the tool server.
+	Logger *slog.Logger
 }

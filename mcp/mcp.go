@@ -29,7 +29,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"log/slog"
 	"net/http"
 	"net/url"
 	"slices"
@@ -39,30 +38,23 @@ import (
 	"github.com/vieolo/vov"
 )
 
-// HandlerOption adjusts the things about an MCP handler that are not
-// declarations. Everything a tool server serves is declared on the app and its
-// endpoints; these are the leftovers.
-type HandlerOption func(*handlerOptions)
-
-type handlerOptions struct{ logger *slog.Logger }
-
-// WithLogger sends protocol-level logging from the SDK to log.
-func WithLogger(log *slog.Logger) HandlerOption {
-	return func(o *handlerOptions) { o.logger = log }
-}
-
 // NewHandler builds the http.Handler serving this app's tool-declaring endpoints
 // over MCP.
 //
 // Everything it needs is already declared: [vov.AppConfig.MCP] names the server
 // and says how a caller is identified, and each endpoint carrying a [vov.MCPTool]
-// becomes a tool. Options are for the few things that are not declarations — a
-// logger, for now.
+// becomes a tool.
 //
-// Mount the result wherever the application likes — including on [vov.App.Mux],
-// which is what an app whose tool endpoint carries its own OAuth gate will want,
-// since that gate is not vov's Authenticator.
-func NewHandler(app *vov.App, opts ...HandlerOption) (http.Handler, error) {
+// Most applications never call this. Setting [vov.MCPConfig.Path] and pointing
+// [vov.MCPConfig.BuildHandler] at this function is enough — vov builds and mounts
+// the handler itself:
+//
+//	MCP: &vov.MCPConfig{Path: "/mcp", BuildHandler: mcp.NewHandler, ...}
+//
+// Call it directly only to mount the result somewhere vov would not — inside an
+// app's own OAuth gate, for instance, since that gate is not vov's
+// Authenticator. Leave Path empty in that case.
+func NewHandler(app *vov.App) (http.Handler, error) {
 	if app == nil {
 		return nil, fmt.Errorf("mcp: app is nil")
 	}
@@ -70,14 +62,9 @@ func NewHandler(app *vov.App, opts ...HandlerOption) (http.Handler, error) {
 	if cfg == nil {
 		return nil, fmt.Errorf("mcp: this app declares no AppConfig.MCP")
 	}
-	var o handlerOptions
-	for _, apply := range opts {
-		apply(&o)
-	}
-
 	server := sdk.NewServer(
 		&sdk.Implementation{Name: cfg.Name, Title: cfg.Title, Version: cfg.Version},
-		&sdk.ServerOptions{Instructions: cfg.Instructions, Logger: o.logger},
+		&sdk.ServerOptions{Instructions: cfg.Instructions, Logger: cfg.Logger},
 	)
 
 	// The tools are the endpoints that say they are tools. NewApp has already

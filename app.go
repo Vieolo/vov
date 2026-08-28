@@ -220,6 +220,24 @@ func NewApp(cfg AppConfig) (*App, error) {
 		if len(seenTool) == 0 {
 			return nil, fmt.Errorf("vov: AppConfig.MCP is set but no endpoint declares an MCPTool")
 		}
+		if cfg.MCP.Path != "" {
+			if cfg.MCP.Path[0] != '/' {
+				return nil, fmt.Errorf("vov: AppConfig.MCP.Path %q must begin with %q", cfg.MCP.Path, "/")
+			}
+			if cfg.MCP.BuildHandler == nil {
+				return nil, fmt.Errorf("vov: AppConfig.MCP.Path is set but BuildHandler is nil (pass mcp.NewHandler)")
+			}
+			h, err := cfg.MCP.BuildHandler(app)
+			if err != nil {
+				return nil, fmt.Errorf("vov: building the MCP handler: %w", err)
+			}
+			if h == nil {
+				return nil, fmt.Errorf("vov: AppConfig.MCP.BuildHandler returned a nil handler")
+			}
+			// Registered like any other route, so it sits inside ServerWrappers
+			// and gets the same recovery and logging as everything else.
+			app.mux.Handle(cfg.MCP.Path, h)
+		}
 	}
 
 	// Wrap the finished mux. This is the only layer that sees the requests the

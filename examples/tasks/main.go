@@ -126,6 +126,10 @@ func main() {
 			// The same function vov itself authenticates with. An app whose tool
 			// endpoint honoured OAuth access tokens would pass a different one.
 			Authenticate: makeAuthenticator(cfg.Token),
+			// Serve it here. vov builds the handler with the constructor named
+			// below and mounts it; there is nothing to do after NewApp.
+			Path:         "/mcp",
+			BuildHandler: mcp.NewHandler,
 		},
 		// How this app resolves the user of a request. Endpoints require one
 		// unless they declare vov.NoAuth(). The valid token comes from the
@@ -160,16 +164,6 @@ func main() {
 	app.Mux().HandleFunc("GET /version", func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]string{"version": "0.1.0"})
 	})
-
-	// Everything the tool server needs is already declared, so building it takes
-	// only the app. It goes on the raw mux because the MCP endpoint is a
-	// transport carrying calls to many endpoints and authenticates its own
-	// callers; a real deployment would add its OAuth check here.
-	mcpHandler, err := mcp.NewHandler(app)
-	if err != nil {
-		log.Fatalf("tasks: %v", err)
-	}
-	app.Mux().Handle("/mcp", mcpHandler)
 
 	// Deliberately panics, to show that ServerWrappers cover escape-hatch
 	// routes too: nothing vov knows about is involved in serving this.

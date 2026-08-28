@@ -150,8 +150,18 @@ directive in `go.mod`).
   ```
 
   Nothing is restated: the method, path, arguments and policy are the ones on
-  that line. `AppConfig.MCP` names the server and says how a tool caller is
-  identified, and `mcp.NewHandler(app)` needs nothing else.
+  that line. `AppConfig.MCP` supplies the app-level half — including where to
+  serve it — and there is nothing to do after `NewApp`:
+
+  ```go
+  MCP: &vov.MCPConfig{
+      Name: "tasks", Version: "0.1.0",
+      Instructions: "…",
+      Authenticate: makeAuthenticator(cfg.Token),
+      Path:         "/mcp",
+      BuildHandler: mcp.NewHandler,
+  },
+  ```
 
   ```bash
   curl -s localhost:8080/mcp -H 'Authorization: Bearer t-ramtin' \
