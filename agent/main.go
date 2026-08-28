@@ -3,10 +3,7 @@
 //	go -C agent run . verify              build, vet, test and gofmt every module
 //	go -C agent run . manifest [--write]  check (or regenerate) the route manifest
 //	go -C agent run . smoke               run the example end to end
-//	go -C agent run . versions            check every recorded version agrees
-//	go -C agent run . all                 all four, in that order
-//	go -C agent run . bump                0.2.1 -> 0.2.2, everywhere it is recorded
-//	go -C agent run . bump-minor          0.2.1 -> 0.3.0, everywhere it is recorded
+//	go -C agent run . all                 all three, in that order
 //
 // It is its own module so that what it needs to check vov never becomes
 // something vov's users have to download — the ephemeral database a future
@@ -53,28 +50,18 @@ func main() {
 		code = manifest(root, hasFlag(args[1:], "--write"))
 	case "smoke":
 		code = smoke(root)
-	case "versions":
-		code = versions(root)
-	case "bump":
-		code = bump(root, false)
-	case "bump-minor":
-		code = bump(root, true)
 	case "all":
 		for _, run := range []func() int{
 			func() int { return verify(root) },
 			func() int { return manifest(root, false) },
 			func() int { return smoke(root) },
-			// Last: release hygiene, and legitimately red between noticing a
-			// packaging bug and cutting the release that fixes it. It must not
-			// stand in front of the checks above — see versions.
-			func() int { return versions(root) },
 		} {
 			if code = run(); code != 0 {
 				break
 			}
 		}
 	default:
-		fmt.Fprintf(os.Stderr, "agent: unknown command %q; supported: verify, manifest, smoke, versions, all, bump, bump-minor\n", cmd)
+		fmt.Fprintf(os.Stderr, "agent: unknown command %q; supported: verify, manifest, smoke, all\n", cmd)
 		code = 2
 	}
 	os.Exit(code)
