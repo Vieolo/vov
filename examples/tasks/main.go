@@ -26,6 +26,7 @@ import (
 	"time"
 
 	"github.com/vieolo/vov"
+	"github.com/vieolo/vov/mcp"
 )
 
 // config is both the declaration of what this service reads from the
@@ -88,7 +89,10 @@ func main() {
 		// runs outside the auth guard (so it covers rejected requests too); Post
 		// runs inside it, where the user is known.
 		MiddlewareStacks: map[string]vov.MiddlewareStack{
-			// Applies to every endpoint that does not name another stack.
+			// requestID and logging sit here so each response says which stack
+			// ran, which is what the smoke suite asserts on. A production app
+			// would hoist both into ServerWrappers instead, so that unrouted
+			// requests get an id and a log line too.
 			vov.DefaultStackName: {
 				Pre:  []vov.Middleware{requestID, logging},
 				Post: []vov.Middleware{auditLog},
@@ -107,6 +111,26 @@ func main() {
 			// Deliberately nothing. A health check should not depend on any of it.
 			"bare": {},
 		},
+		// The tool server. It names itself and says how a tool caller is
+		// identified — and nothing else, because which endpoints are exposed is
+		// declared on the endpoints themselves.
+		MCP: &vov.MCPConfig{
+			Name:    "tasks",
+			Title:   "Tasks",
+			Version: "0.1.0",
+			// Read once, at connection, and worth more than it looks: it is how
+			// the assistant learns the order to do things in.
+			Instructions: "A shared task list. Call list_tasks before creating or " +
+				"deleting anything, so you act on ids that exist. Reports are only " +
+				"available to accounts on a paid plan.",
+			// The same function vov itself authenticates with. An app whose tool
+			// endpoint honoured OAuth access tokens would pass a different one.
+			Authenticate: makeAuthenticator(cfg.Token),
+			// Serve it here. vov builds the handler with the constructor named
+			// below and mounts it; there is nothing to do after NewApp.
+			Path:         "/mcp",
+			BuildHandler: mcp.NewHandler,
+		},
 		// How this app resolves the user of a request. Endpoints require one
 		// unless they declare vov.NoAuth(). The valid token comes from the
 		// environment, which is why the authenticator is built from cfg.
@@ -119,12 +143,15 @@ func main() {
 			{Path: "/tasks", Endpoints: collectionEndpoints()},
 			{Path: "/tasks/{id}", Endpoints: itemEndpoints()},
 			{Path: "/reports", Endpoints: reportEndpoints()},
+			{Path: "/summary", Endpoints: summaryEndpoints()},
 			{Path: "/webhook", Endpoints: webhookEndpoints()},
 		},
 	})
 	if err != nil {
 		log.Fatalf("tasks: %v", err)
 	}
+
+	application.Set(app)
 
 	if *printManifest {
 		fmt.Print(app.Manifest())
@@ -279,10 +306,50 @@ func reportEndpoints() vov.Endpoints {
 		GET: vov.Endpoint{
 			RolesAnyOf: []string{"member"},
 			MinTier:    2,
+			MCPTool: &vov.MCPTool{
+				Name: "get_reports",
+				Description: "Aggregate figures across the whole list. Requires a " +
+					"paid plan; on a free account this returns a message saying so.",
+			},
 			Handler: func(w http.ResponseWriter, r *http.Request) {
 				d := deps.Get()
 				d.Log.Info("report served", "to", currentUser(r).name)
 				writeJSON(w, http.StatusOK, map[string]any{"tasks": d.Store.len()})
+			},
+		},
+	}
+}
+
+// summaryEndpoints serves /summary by calling another endpoint in process
+// instead of reaching into the store, which is what a tool call does.
+//
+// The caller's own identity is passed to Invoke, so /reports enforces its role
+// and tier requirements against them: an unpaid user sees the 402 the paywall
+// would have given them directly, rather than being handed data through a side
+// door. That property is the reason a tool should dispatch to its endpoint
+// rather than reimplement it.
+func summaryEndpoints() vov.Endpoints {
+	return vov.Endpoints{
+		GET: vov.Endpoint{
+			Handler: func(w http.ResponseWriter, r *http.Request) {
+				u, _ := vov.UserFrom(r.Context())
+				res, err := application.Get().Invoke(r.Context(), vov.InvokeRequest{
+					Method: http.MethodGet,
+					Path:   "/reports",
+					User:   u,
+				})
+				if err != nil {
+					writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "dispatch failed"})
+					return
+				}
+				// The inner body is JSON when /reports answers and plain text
+				// when the guard refuses it, since vov writes refusals with
+				// http.Error. A caller relaying an inner response — an MCP tool,
+				// say — has to cope with both.
+				writeJSON(w, http.StatusOK, map[string]any{
+					"reports_status": res.Status,
+					"reports_body":   strings.TrimSpace(string(res.Body)),
+				})
 			},
 		},
 	}
@@ -379,14 +446,21 @@ func logging(next http.Handler) http.Handler {
 	})
 }
 
-// auditLog records who performed the request. It is the reason the after-auth
-// phase exists: it needs the user, so it cannot run in the outer stack, which
-// executes before anyone has been authenticated.
+// auditLog records who performed the request, and over which channel. It is the
+// reason the after-auth phase exists: it needs the user, so it cannot run in the
+// outer stack, which executes before anyone has been authenticated.
+//
+// Recording the mode is the legitimate use of it — this row is how a tool call
+// and a browser call get told apart afterwards. Nothing here branches on it, and
+// nothing downstream should: see vov.RequestMode.
 func auditLog(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		u := currentUser(r)
+		mode := vov.ModeFrom(r.Context())
 		w.Header().Set("X-Audit-User", u.name)
-		log.Printf("audit: %s %s by %s", r.Method, r.URL.Path, u.name)
+		w.Header().Set("X-Audit-Mode", string(mode))
+		deps.Get().Log.Info("audit", "method", r.Method, "path", r.URL.Path,
+			"by", u.name, "mode", string(mode))
 		next.ServeHTTP(w, r)
 	})
 }

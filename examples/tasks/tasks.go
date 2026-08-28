@@ -18,18 +18,43 @@ import (
 	"github.com/vieolo/vov"
 )
 
+// The prose an assistant reads. It lives beside the endpoints rather than inside
+// the literals, because a 200-character string in a route table reads badly —
+// which is a formatting problem with a formatting answer, not a reason to declare
+// the route somewhere else.
+const (
+	listTasksDoc = "Every task on the list, with its id, title and owner. " +
+		"Start here: the ids returned are what get_task and delete_task take."
+	getTaskDoc = "One task in full, by id. Prefer this over scanning list_tasks " +
+		"when you already know which task you mean."
+	createTaskDoc = "Add a task to the list. The title is what a person will read, " +
+		"so write it as an instruction rather than a summary."
+	deleteTaskDoc = "Remove a task permanently. Only an admin or an owner may do " +
+		"this, and it cannot be undone — confirm before calling it."
+)
+
 // collectionEndpoints serves /tasks.
 func collectionEndpoints() vov.Endpoints {
 	return vov.Endpoints{
 		// Nothing declared, so: default stack, auth required. The majority case
 		// says nothing and is protected anyway.
-		GET: vov.Endpoint{Handler: listTasks},
+		GET: vov.Endpoint{
+			Handler: listTasks,
+			Query:   vov.QueryOf[listTasksQuery](),
+			// One line makes this endpoint callable by an assistant. Its method,
+			// path, arguments and policy are the ones declared right here.
+			MCPTool: &vov.MCPTool{Name: "list_tasks", Description: listTasksDoc},
+		},
 		// Reading is open to any authenticated user; writing takes a permission.
 		// Same URL, different wrapping and different authority — per method.
 		POST: vov.Endpoint{
 			Handler:          createTask,
 			MiddlewareStack:  "json",
 			PermissionsAllOf: []string{"tasks.write"},
+			// The same type createTask decodes into — and the same schema the
+			// assistant is given for its arguments.
+			Body:    vov.BodyOf[createTaskInput](),
+			MCPTool: &vov.MCPTool{Name: "create_task", Description: createTaskDoc},
 		},
 	}
 }
@@ -37,7 +62,10 @@ func collectionEndpoints() vov.Endpoints {
 // itemEndpoints serves /tasks/{id}.
 func itemEndpoints() vov.Endpoints {
 	return vov.Endpoints{
-		GET: vov.Endpoint{Handler: getTask},
+		GET: vov.Endpoint{
+			Handler: getTask,
+			MCPTool: &vov.MCPTool{Name: "get_task", Description: getTaskDoc},
+		},
 		// Deleting needs both: one of the listed roles (any-of) and every listed
 		// permission (all-of). Reading the same URL needs neither — which is the
 		// point of configuring auth per method rather than per URL.
@@ -45,11 +73,20 @@ func itemEndpoints() vov.Endpoints {
 			Handler:          deleteTask,
 			RolesAnyOf:       []string{"admin", "owner"},
 			PermissionsAllOf: []string{"tasks.write"},
+			// The tool inherits the role and permission above: an assistant
+			// acting for a member is refused exactly as a browser would be.
+			MCPTool: &vov.MCPTool{Name: "delete_task", Description: deleteTaskDoc},
 		},
 	}
 }
 
 // --- handlers ---------------------------------------------------------------
+
+// listTasksQuery declares what GET /tasks accepts in its query string.
+type listTasksQuery struct {
+	Owner string `json:"owner"`
+	Limit int    `json:"limit"`
+}
 
 func listTasks(w http.ResponseWriter, r *http.Request) {
 	d := deps.Get()
@@ -58,11 +95,23 @@ func listTasks(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, out)
 }
 
+// createTaskInput is both what createTask decodes into and what the endpoint
+// declares as its body, so the contract and the code that reads it are the same
+// type and cannot drift.
+//
+// Note the two optional fields. Tags is a plain slice: absent and empty are the
+// same thing for it. Notes is a pointer, so the handler can tell an absent field
+// from an explicit null — the distinction a PATCH needs, and the reason vov
+// describes the shape rather than decoding it for you.
+type createTaskInput struct {
+	Title string   `json:"title" vov:"required"`
+	Tags  []string `json:"tags"`
+	Notes *string  `json:"notes"`
+}
+
 func createTask(w http.ResponseWriter, r *http.Request) {
 	d := deps.Get()
-	var in struct {
-		Title string `json:"title"`
-	}
+	var in createTaskInput
 	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid JSON body"})
 		return

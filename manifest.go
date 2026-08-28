@@ -12,11 +12,14 @@ import (
 const manifestHeader = `# vov route manifest — every endpoint this app declares, and who may reach it.
 # Regenerate whenever a route declaration changes; review the diff.
 #
-#   METHOD  PATH  auth:<mode>  stack:<name>  [roles-any:a|b]  [perms-all:x,y]  [min-tier:N]
+#   METHOD  PATH  auth:<mode>  stack:<name>  [roles-any:a|b]  [perms-all:x,y]
+#                 [min-tier:N]  [query:Type]  [body:Type]  [mcp-tool:name]
 #
 # roles-any  is satisfied by ANY one of the listed roles       (| reads as "or")
 # perms-all  requires EVERY one of the listed permissions      (, reads as "and")
 # min-tier   requires User.Tier() >= N; refused with 402, not 403
+# query/body the Go type the input shape was declared from
+# mcp-tool   the endpoint is callable by an AI assistant under this name
 
 `
 
@@ -94,6 +97,21 @@ func manifestLine(path string, me methodEndpoint) string {
 	if tier := me.Endpoint.MinTier; tier > 0 {
 		fields = append(fields, fmt.Sprintf("min-tier:%d", tier))
 	}
+	// The declared input shapes, by the Go type they came from. The name is what
+	// a reviewer can act on: a route that gains or loses a body is a contract
+	// change worth a line, while spelling out every field would bury the policy
+	// this file exists to show.
+	if q := me.Endpoint.Query; q != nil {
+		fields = append(fields, "query:"+q.TypeName)
+	}
+	if b := me.Endpoint.Body; b != nil {
+		fields = append(fields, "body:"+b.TypeName)
+	}
+	// Which endpoints an assistant can reach is worth a reviewer's attention in
+	// its own right: it is a second audience for the same policy.
+	if t := me.Endpoint.MCPTool; t != nil {
+		fields = append(fields, "mcp-tool:"+t.Name)
+	}
 
 	return fmt.Sprintf("%-*s %-*s %s",
 		manifestMethodWidth, method,
@@ -106,6 +124,13 @@ func manifestLine(path string, me methodEndpoint) string {
 // routing by editing it.
 func (a *App) Routes() []Route {
 	return slices.Clone(a.routes)
+}
+
+// MCP returns the app's Model Context Protocol declaration, or nil when it has
+// none. It is how the vov/mcp module reads what to serve; applications rarely
+// need it.
+func (a *App) MCP() *MCPConfig {
+	return a.mcp
 }
 
 // Manifest renders the app's routes — see [Manifest].

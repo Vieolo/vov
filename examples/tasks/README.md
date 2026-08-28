@@ -132,10 +132,47 @@ directive in `go.mod`).
   DELETE  /tasks/{id}    auth:required  stack:default  roles-any:admin|owner  perms-all:tasks.write
   ```
 
-  `python3 agent.py manifest` fails if the code and the file disagree. That is
+  `go -C agent run . manifest` fails if the code and the file disagree. That is
   the whole point: make `GET /tasks/{id}` public and `verify` and `smoke` both
   stay green, because no test asserts a property nobody thought to assert — but
   the manifest shows a changed line.
+
+- **The same endpoints as MCP tools** — an endpoint becomes callable by an AI
+  assistant by carrying an `MCPTool`, right where it is already declared:
+
+  ```go
+  DELETE: vov.Endpoint{
+      Handler:          deleteTask,
+      RolesAnyOf:       []string{"admin", "owner"},
+      PermissionsAllOf: []string{"tasks.write"},
+      MCPTool:          &vov.MCPTool{Name: "delete_task", Description: deleteTaskDoc},
+  },
+  ```
+
+  Nothing is restated: the method, path, arguments and policy are the ones on
+  that line. `AppConfig.MCP` supplies the app-level half — including where to
+  serve it — and there is nothing to do after `NewApp`:
+
+  ```go
+  MCP: &vov.MCPConfig{
+      Name: "tasks", Version: "0.1.0",
+      Instructions: "…",
+      Authenticate: makeAuthenticator(cfg.Token),
+      Path:         "/mcp",
+      BuildHandler: mcp.NewHandler,
+  },
+  ```
+
+  ```bash
+  curl -s localhost:8080/mcp -H 'Authorization: Bearer t-ramtin' \
+    -H 'Content-Type: application/json' -H 'Accept: application/json, text/event-stream' \
+    -d '{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}'
+  ```
+
+  `delete_task` refuses a caller without the role, and `get_reports` tells an
+  unpaid caller to subscribe — both from the endpoint declaration. The manifest
+  shows which endpoints are exposed, since a second audience for the same policy
+  is worth a reviewer seeing.
 
 ## Run it
 
