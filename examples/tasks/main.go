@@ -26,6 +26,7 @@ import (
 	"time"
 
 	"github.com/vieolo/vov"
+	"github.com/vieolo/vov/mcp"
 )
 
 // config is both the declaration of what this service reads from the
@@ -110,6 +111,22 @@ func main() {
 			// Deliberately nothing. A health check should not depend on any of it.
 			"bare": {},
 		},
+		// The tool server. It names itself and says how a tool caller is
+		// identified — and nothing else, because which endpoints are exposed is
+		// declared on the endpoints themselves.
+		MCP: &vov.MCPConfig{
+			Name:    "tasks",
+			Title:   "Tasks",
+			Version: "0.1.0",
+			// Read once, at connection, and worth more than it looks: it is how
+			// the assistant learns the order to do things in.
+			Instructions: "A shared task list. Call list_tasks before creating or " +
+				"deleting anything, so you act on ids that exist. Reports are only " +
+				"available to accounts on a paid plan.",
+			// The same function vov itself authenticates with. An app whose tool
+			// endpoint honoured OAuth access tokens would pass a different one.
+			Authenticate: makeAuthenticator(cfg.Token),
+		},
 		// How this app resolves the user of a request. Endpoints require one
 		// unless they declare vov.NoAuth(). The valid token comes from the
 		// environment, which is why the authenticator is built from cfg.
@@ -143,6 +160,16 @@ func main() {
 	app.Mux().HandleFunc("GET /version", func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]string{"version": "0.1.0"})
 	})
+
+	// Everything the tool server needs is already declared, so building it takes
+	// only the app. It goes on the raw mux because the MCP endpoint is a
+	// transport carrying calls to many endpoints and authenticates its own
+	// callers; a real deployment would add its OAuth check here.
+	mcpHandler, err := mcp.NewHandler(app)
+	if err != nil {
+		log.Fatalf("tasks: %v", err)
+	}
+	app.Mux().Handle("/mcp", mcpHandler)
 
 	// Deliberately panics, to show that ServerWrappers cover escape-hatch
 	// routes too: nothing vov knows about is involved in serving this.
@@ -285,6 +312,11 @@ func reportEndpoints() vov.Endpoints {
 		GET: vov.Endpoint{
 			RolesAnyOf: []string{"member"},
 			MinTier:    2,
+			Tool: &vov.Tool{
+				Name: "get_reports",
+				Description: "Aggregate figures across the whole list. Requires a " +
+					"paid plan; on a free account this returns a message saying so.",
+			},
 			Handler: func(w http.ResponseWriter, r *http.Request) {
 				d := deps.Get()
 				d.Log.Info("report served", "to", currentUser(r).name)

@@ -18,20 +18,43 @@ import (
 	"github.com/vieolo/vov"
 )
 
+// The prose an assistant reads. It lives beside the endpoints rather than inside
+// the literals, because a 200-character string in a route table reads badly —
+// which is a formatting problem with a formatting answer, not a reason to declare
+// the route somewhere else.
+const (
+	listTasksDoc = "Every task on the list, with its id, title and owner. " +
+		"Start here: the ids returned are what get_task and delete_task take."
+	getTaskDoc = "One task in full, by id. Prefer this over scanning list_tasks " +
+		"when you already know which task you mean."
+	createTaskDoc = "Add a task to the list. The title is what a person will read, " +
+		"so write it as an instruction rather than a summary."
+	deleteTaskDoc = "Remove a task permanently. Only an admin or an owner may do " +
+		"this, and it cannot be undone — confirm before calling it."
+)
+
 // collectionEndpoints serves /tasks.
 func collectionEndpoints() vov.Endpoints {
 	return vov.Endpoints{
 		// Nothing declared, so: default stack, auth required. The majority case
 		// says nothing and is protected anyway.
-		GET: vov.Endpoint{Handler: listTasks, Query: vov.QueryOf[listTasksQuery]()},
+		GET: vov.Endpoint{
+			Handler: listTasks,
+			Query:   vov.QueryOf[listTasksQuery](),
+			// One line makes this endpoint callable by an assistant. Its method,
+			// path, arguments and policy are the ones declared right here.
+			Tool: &vov.Tool{Name: "list_tasks", Description: listTasksDoc},
+		},
 		// Reading is open to any authenticated user; writing takes a permission.
 		// Same URL, different wrapping and different authority — per method.
 		POST: vov.Endpoint{
 			Handler:          createTask,
 			MiddlewareStack:  "json",
 			PermissionsAllOf: []string{"tasks.write"},
-			// The same type createTask decodes into.
+			// The same type createTask decodes into — and the same schema the
+			// assistant is given for its arguments.
 			Body: vov.BodyOf[createTaskInput](),
+			Tool: &vov.Tool{Name: "create_task", Description: createTaskDoc},
 		},
 	}
 }
@@ -39,7 +62,10 @@ func collectionEndpoints() vov.Endpoints {
 // itemEndpoints serves /tasks/{id}.
 func itemEndpoints() vov.Endpoints {
 	return vov.Endpoints{
-		GET: vov.Endpoint{Handler: getTask},
+		GET: vov.Endpoint{
+			Handler: getTask,
+			Tool:    &vov.Tool{Name: "get_task", Description: getTaskDoc},
+		},
 		// Deleting needs both: one of the listed roles (any-of) and every listed
 		// permission (all-of). Reading the same URL needs neither — which is the
 		// point of configuring auth per method rather than per URL.
@@ -47,6 +73,9 @@ func itemEndpoints() vov.Endpoints {
 			Handler:          deleteTask,
 			RolesAnyOf:       []string{"admin", "owner"},
 			PermissionsAllOf: []string{"tasks.write"},
+			// The tool inherits the role and permission above: an assistant
+			// acting for a member is refused exactly as a browser would be.
+			Tool: &vov.Tool{Name: "delete_task", Description: deleteTaskDoc},
 		},
 	}
 }

@@ -30,6 +30,7 @@ ROOT = Path(__file__).resolve().parent
 # (label, module directory relative to ROOT). Order is fixed for determinism.
 MODULES = [
     ("vov", "."),
+    ("mcp", "mcp"),
     ("examples/tasks", "examples/tasks"),
 ]
 
@@ -278,6 +279,69 @@ def smoke() -> int:
             # The outer request arrived over the network; the inner one did not.
             # Both are audited, and the mode is what tells them apart afterwards.
             check("     outer call audited as network", hdrs.get("X-Audit-Mode"), "network")
+
+            # --- MCP: the same endpoints, called as tools ---------------------
+            def rpc(method, params, token="t-ramtin"):
+                body = json.dumps({"jsonrpc": "2.0", "id": 1,
+                                   "method": method, "params": params}).encode()
+                _, _, raw = _http("/mcp", "POST", body, {
+                    "Content-Type": "application/json",
+                    "Accept": "application/json, text/event-stream",
+                    "Authorization": "Bearer " + token,
+                })
+                return json.loads(raw)
+
+            init = rpc("initialize", {"protocolVersion": "2026-07-28",
+                                      "capabilities": {},
+                                      "clientInfo": {"name": "smoke", "version": "1"}})
+            check("MCP  initialize", init.get("result", {}).get("serverInfo", {}).get("name"), "tasks")
+
+            listed = rpc("tools/list", {})
+            tools = {t["name"]: t for t in listed.get("result", {}).get("tools", [])}
+            check("MCP  tools/list", sorted(tools),
+                  ["create_task", "delete_task", "get_reports", "get_task", "list_tasks"])
+            # The schema is derived from the endpoint's declared Body, not hand-written.
+            create = tools["create_task"]["inputSchema"]
+            check("     create_task schema from Body",
+                  sorted(create.get("properties", {})), ["notes", "tags", "title"])
+            check("     required derives from the vov tag", create.get("required"), ["title"])
+            # A path parameter becomes a required argument.
+            check("     get_task takes its path param",
+                  tools["get_task"]["inputSchema"].get("required"), ["id"])
+            # ReadOnly is derived from the HTTP method.
+            check("     GET tool is read-only",
+                  tools["list_tasks"]["annotations"]["readOnlyHint"], True)
+            check("     POST tool is not",
+                  tools["create_task"]["annotations"]["readOnlyHint"], False)
+
+            def call(name, args, token="t-ramtin"):
+                out = rpc("tools/call", {"name": name, "arguments": args}, token)
+                r = out.get("result", {})
+                text = "".join(c.get("text", "") for c in r.get("content", []))
+                return r.get("isError", False), text.strip()
+
+            err, text = call("create_task", {"title": "from an assistant"})
+            check("MCP  create_task", err, False)
+            check("     handler ran, owner from the token",
+                  json.loads(text).get("owner"), "ramtin")
+
+            err, text = call("list_tasks", {})
+            check("MCP  list_tasks", err, False)
+
+            # The tool meets the same policy the endpoint declares: deleting
+            # needs a role this caller does not have.
+            err, text = call("delete_task", {"id": "1"})
+            check("MCP  delete_task (no role)", (err, "may not perform" in text), (True, True))
+
+            # And the paywall answers with something a model can act on.
+            err, text = call("get_reports", {}, token="t-ramtin-reader")
+            check("MCP  get_reports (unpaid)", (err, "paid subscription" in text), (True, True))
+            err, _ = call("get_reports", {}, token="t-ramtin-pro")
+            check("MCP  get_reports (paid)", err, False)
+
+            # A missing required argument never reaches the endpoint.
+            err, text = call("get_task", {})
+            check("MCP  get_task (no id)", (err, "missing required argument" in text), (True, True))
 
             # --- one URL, several methods ------------------------------------
             # /tasks/{id} declares GET and DELETE in a single Route.

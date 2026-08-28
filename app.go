@@ -90,6 +90,15 @@ type AppConfig struct {
 	// [DefaultShutdownTimeout] when zero.
 	ShutdownTimeout time.Duration
 
+	// MCP, when set, describes the Model Context Protocol server this app
+	// exposes — see [MCPConfig]. The endpoints it exposes are the ones declaring
+	// a [Tool]; nothing is restated here.
+	//
+	// Setting it does not serve anything by itself. The vov/mcp module builds a
+	// handler from this and the declarations, which the app mounts where it
+	// likes.
+	MCP *MCPConfig
+
 	// Server optionally tunes the http.Server vov serves with — timeouts, TLS,
 	// connection hooks, byte limits, and so on. It mirrors http.Server but drops
 	// Addr and Handler, which vov owns (one place for each, no conflicting
@@ -103,6 +112,7 @@ type AppConfig struct {
 // holds the http.Server it will serve with, and owns the server lifecycle.
 // Construct it with [NewApp].
 type App struct {
+	mcp             *MCPConfig
 	mux             *http.ServeMux
 	handler         http.Handler // mux wrapped in ServerWrappers; what is served
 	server          *http.Server
@@ -121,6 +131,7 @@ type App struct {
 // http.ServeMux.)
 func NewApp(cfg AppConfig) (*App, error) {
 	app := &App{
+		mcp:             cfg.MCP,
 		mux:             http.NewServeMux(),
 		shutdownTimeout: cfg.ShutdownTimeout,
 	}
@@ -139,6 +150,7 @@ func NewApp(cfg AppConfig) (*App, error) {
 		}
 	}
 
+	seenTool := map[string]string{}
 	seenPath := make(map[string]int, len(cfg.Routes))
 	for i, r := range cfg.Routes {
 		if err := validateRoutePath(r); err != nil {
@@ -175,6 +187,18 @@ func NewApp(cfg AppConfig) (*App, error) {
 			if err := me.Endpoint.Query.Err(); err != nil {
 				return nil, fmt.Errorf("vov: route %d (%s): Query: %w", i, p, err)
 			}
+			if t := me.Endpoint.Tool; t != nil {
+				if t.Name == "" {
+					return nil, fmt.Errorf("vov: route %d (%s): Tool has no name", i, p)
+				}
+				if prev, dup := seenTool[t.Name]; dup {
+					return nil, fmt.Errorf("vov: route %d (%s): tool %q is already declared by %s", i, p, t.Name, prev)
+				}
+				seenTool[t.Name] = p
+				if cfg.MCP == nil {
+					return nil, fmt.Errorf("vov: route %d (%s): declares tool %q but AppConfig.MCP is nil, so nothing would serve it", i, p, t.Name)
+				}
+			}
 
 			stack, err := resolveStack(cfg.MiddlewareStacks, me.Endpoint.MiddlewareStack)
 			if err != nil {
@@ -184,6 +208,18 @@ func NewApp(cfg AppConfig) (*App, error) {
 			app.mux.Handle(p, me.Endpoint.wrapped(stack, cfg.Authenticator))
 		}
 		app.routes = append(app.routes, r)
+	}
+
+	if cfg.MCP != nil {
+		if cfg.MCP.Name == "" || cfg.MCP.Version == "" {
+			return nil, fmt.Errorf("vov: AppConfig.MCP: Name and Version are required")
+		}
+		if cfg.MCP.Authenticate == nil {
+			return nil, fmt.Errorf("vov: AppConfig.MCP: Authenticate is required — only the app knows which credentials its tool endpoint honours")
+		}
+		if len(seenTool) == 0 {
+			return nil, fmt.Errorf("vov: AppConfig.MCP is set but no endpoint declares a Tool")
+		}
 	}
 
 	// Wrap the finished mux. This is the only layer that sees the requests the

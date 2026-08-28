@@ -137,6 +137,33 @@ directive in `go.mod`).
   stay green, because no test asserts a property nobody thought to assert — but
   the manifest shows a changed line.
 
+- **The same endpoints as MCP tools** — an endpoint becomes callable by an AI
+  assistant by carrying a `Tool`, right where it is already declared:
+
+  ```go
+  DELETE: vov.Endpoint{
+      Handler:          deleteTask,
+      RolesAnyOf:       []string{"admin", "owner"},
+      PermissionsAllOf: []string{"tasks.write"},
+      Tool:             &vov.Tool{Name: "delete_task", Description: deleteTaskDoc},
+  },
+  ```
+
+  Nothing is restated: the method, path, arguments and policy are the ones on
+  that line. `AppConfig.MCP` names the server and says how a tool caller is
+  identified, and `mcp.NewHandler(app)` needs nothing else.
+
+  ```bash
+  curl -s localhost:8080/mcp -H 'Authorization: Bearer t-ramtin' \
+    -H 'Content-Type: application/json' -H 'Accept: application/json, text/event-stream' \
+    -d '{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}'
+  ```
+
+  `delete_task` refuses a caller without the role, and `get_reports` tells an
+  unpaid caller to subscribe — both from the endpoint declaration. The manifest
+  shows which endpoints are exposed, since a second audience for the same policy
+  is worth a reviewer seeing.
+
 ## Run it
 
 `TASKS_TOKEN` is required — without it the server refuses to start and says so:

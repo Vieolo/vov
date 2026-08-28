@@ -63,6 +63,19 @@ type AuthResponse struct {
 	header http.Header
 }
 
+// NewAuthResponse wraps h so that an [Authenticator] can be driven from outside
+// this package — by an in-process caller such as an MCP tool server, or a test.
+//
+// Pass the header of the response the call will produce. Passing a throwaway
+// header is valid and means any header the authenticator sets is discarded,
+// which is the honest thing to do when there is no response to put it on.
+func NewAuthResponse(h http.Header) AuthResponse {
+	if h == nil {
+		h = http.Header{}
+	}
+	return AuthResponse{header: h}
+}
+
 // Header returns the response headers, for anything [AuthResponse.SetCookie]
 // does not cover — a WWW-Authenticate challenge, for instance.
 func (a AuthResponse) Header() http.Header {

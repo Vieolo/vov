@@ -2,18 +2,19 @@
 # Regenerate whenever a route declaration changes; review the diff.
 #
 #   METHOD  PATH  auth:<mode>  stack:<name>  [roles-any:a|b]  [perms-all:x,y]
-#                 [min-tier:N]  [query:Type]  [body:Type]
+#                 [min-tier:N]  [query:Type]  [body:Type]  [tool:name]
 #
 # roles-any  is satisfied by ANY one of the listed roles       (| reads as "or")
 # perms-all  requires EVERY one of the listed permissions      (, reads as "and")
 # min-tier   requires User.Tier() >= N; refused with 402, not 403
 # query/body the Go type the input shape was declared from
+# tool       the endpoint is callable by an AI assistant under this name
 
 GET     /healthz                       auth:none  stack:bare
-GET     /reports                       auth:required  stack:default  roles-any:member  min-tier:2
+GET     /reports                       auth:required  stack:default  roles-any:member  min-tier:2  tool:get_reports
 GET     /summary                       auth:required  stack:default
-GET     /tasks                         auth:required  stack:default  query:listTasksQuery
-POST    /tasks                         auth:required  stack:json  perms-all:tasks.write  body:createTaskInput
-GET     /tasks/{id}                    auth:required  stack:default
-DELETE  /tasks/{id}                    auth:required  stack:default  roles-any:admin|owner  perms-all:tasks.write
+GET     /tasks                         auth:required  stack:default  query:listTasksQuery  tool:list_tasks
+POST    /tasks                         auth:required  stack:json  perms-all:tasks.write  body:createTaskInput  tool:create_task
+GET     /tasks/{id}                    auth:required  stack:default  tool:get_task
+DELETE  /tasks/{id}                    auth:required  stack:default  roles-any:admin|owner  perms-all:tasks.write  tool:delete_task
 POST    /webhook                       auth:none  stack:webhook

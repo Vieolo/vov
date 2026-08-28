@@ -13,12 +13,13 @@ const manifestHeader = `# vov route manifest — every endpoint this app declare
 # Regenerate whenever a route declaration changes; review the diff.
 #
 #   METHOD  PATH  auth:<mode>  stack:<name>  [roles-any:a|b]  [perms-all:x,y]
-#                 [min-tier:N]  [query:Type]  [body:Type]
+#                 [min-tier:N]  [query:Type]  [body:Type]  [tool:name]
 #
 # roles-any  is satisfied by ANY one of the listed roles       (| reads as "or")
 # perms-all  requires EVERY one of the listed permissions      (, reads as "and")
 # min-tier   requires User.Tier() >= N; refused with 402, not 403
 # query/body the Go type the input shape was declared from
+# tool       the endpoint is callable by an AI assistant under this name
 
 `
 
@@ -106,6 +107,11 @@ func manifestLine(path string, me methodEndpoint) string {
 	if b := me.Endpoint.Body; b != nil {
 		fields = append(fields, "body:"+b.TypeName)
 	}
+	// Which endpoints an assistant can reach is worth a reviewer's attention in
+	// its own right: it is a second audience for the same policy.
+	if t := me.Endpoint.Tool; t != nil {
+		fields = append(fields, "tool:"+t.Name)
+	}
 
 	return fmt.Sprintf("%-*s %-*s %s",
 		manifestMethodWidth, method,
@@ -118,6 +124,13 @@ func manifestLine(path string, me methodEndpoint) string {
 // routing by editing it.
 func (a *App) Routes() []Route {
 	return slices.Clone(a.routes)
+}
+
+// MCP returns the app's Model Context Protocol declaration, or nil when it has
+// none. It is how the vov/mcp module reads what to serve; applications rarely
+// need it.
+func (a *App) MCP() *MCPConfig {
+	return a.mcp
 }
 
 // Manifest renders the app's routes — see [Manifest].
