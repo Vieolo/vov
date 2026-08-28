@@ -14,7 +14,7 @@
 // modified line in a pull request, which is the only place a person sees it.
 //
 // An [App] assembles those declarations onto a standard http.ServeMux, wraps
-// that mux in [AppConfig.ServerWrappers], and serves the result — see
+// that mux in [APIConfig.ServerWrappers], and serves the result — see
 // [App.Handler] for what is served and [App.Mux] for the escape hatch that lets
 // routes vov does not model coexist with the ones it does. It owns the server
 // lifecycle too: binding, SIGINT and SIGTERM, draining, and cleanup hooks.
@@ -27,7 +27,7 @@
 // Requests pass through two distinct layers, and the difference is not
 // cosmetic:
 //
-//	ServerWrappers   every request the server receives, including the 404s and
+//	API.ServerWrappers  every HTTP request the server receives, including the 404s and
 //	                 405s http.ServeMux answers itself — so CORS preflight,
 //	                 panic recovery, and access logging belong here
 //	MiddlewareStack  only requests that reach an endpoint, split by the auth

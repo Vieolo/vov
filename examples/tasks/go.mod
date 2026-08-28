@@ -2,10 +2,7 @@ module github.com/vieolo/vov/examples/tasks
 
 go 1.27
 
-require (
-	github.com/vieolo/vov v0.2.0
-	github.com/vieolo/vov/mcp v0.0.0
-)
+require github.com/vieolo/vov v0.2.0
 
 require (
 	github.com/google/jsonschema-go v0.4.3 // indirect
@@ -23,5 +20,3 @@ require (
 // exactly as an external project would — through an import, across a module
 // boundary. The replace points that import at the local source.
 replace github.com/vieolo/vov => ../../
-
-replace github.com/vieolo/vov/mcp => ../../mcp

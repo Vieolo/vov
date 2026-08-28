@@ -31,7 +31,7 @@ type MiddlewareStack struct {
 	// "Reaches this endpoint" is the limit, and it matters. Anything that must
 	// see every request the server receives — CORS, panic recovery, access
 	// logging, request ids on unrouted paths — belongs in
-	// [AppConfig.ServerWrappers] instead. http.ServeMux answers a request for an
+	// [APIConfig.ServerWrappers] instead. http.ServeMux answers a request for an
 	// undeclared path (404) or an undeclared method (405) itself, before any Pre
 	// middleware exists to run, and a CORS preflight is exactly such a request:
 	// put CORS here and a browser client silently breaks.

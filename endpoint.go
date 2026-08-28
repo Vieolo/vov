@@ -45,6 +45,16 @@ type Endpoint struct {
 	// requirement that silently does nothing.
 	PermissionsAllOf []string
 
+	// ScopeAllOf restricts the endpoint to credentials carrying every listed
+	// scope — see [ScopeRule]. It is a different axis from PermissionsAllOf: a
+	// permission belongs to the principal, a scope to the key in their hand.
+	//
+	// Nil says nothing and takes [AppConfig.Scopes]'s per-method default, which is
+	// how an app keeps a new endpoint governed without anyone remembering to
+	// declare it. Declaring [ScopeNone] is how an endpoint opts out of that
+	// default on purpose.
+	ScopeAllOf *ScopeRule
+
 	// Body describes the shape of the request body, built with [BodyOf] from the
 	// type the handler decodes into. Query does the same for the query string,
 	// with [QueryOf].
@@ -94,6 +104,7 @@ func (e Endpoint) declared() bool {
 		len(e.RolesAnyOf) > 0 ||
 		len(e.PermissionsAllOf) > 0 ||
 		e.MinTier != 0 ||
+		e.ScopeAllOf != nil ||
 		e.Body != nil ||
 		e.Query != nil ||
 		e.MCPTool != nil
@@ -113,11 +124,11 @@ func (e Endpoint) constrained() bool {
 // either, so choosing a different stack can never switch authentication off —
 // only [AuthMode] does that. See [authGuard]. An endpoint declaring
 // [AuthModeNone] has no guard and no user, so its stack's Post half is skipped.
-func (e Endpoint) wrapped(s MiddlewareStack, auth Authenticator) http.Handler {
+func (e Endpoint) wrapped(s MiddlewareStack, auth Authenticator, sc *scopeCheck) http.Handler {
 	var h http.Handler = e.Handler
 	if e.AuthMode.required() {
 		h = apply(h, s.Post)
-		h = authGuard(h, auth, e)
+		h = authGuard(h, auth, e, sc)
 	}
 	return apply(h, s.Pre)
 }
