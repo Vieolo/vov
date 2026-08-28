@@ -13,6 +13,10 @@ external:
       manifest: go -C agent run . manifest
       smoke: go -C agent run . smoke
       check: go -C agent run . all
+      # Release: raise the version everywhere it is recorded, then print the
+      # commit and tag steps to review and run by hand.
+      bump: go -C agent run . bump
+      bump-minor: go -C agent run . bump-minor
   contour:
     # the central store profiles whose rules load eagerly here.
     # List more than one to combine entry points — [python, cli] for a Python
