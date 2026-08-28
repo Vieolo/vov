@@ -26,7 +26,6 @@ import (
 	"time"
 
 	"github.com/vieolo/vov"
-	"github.com/vieolo/vov/mcp"
 )
 
 // config is both the declaration of what this service reads from the
@@ -126,10 +125,9 @@ func main() {
 			// The same function vov itself authenticates with. An app whose tool
 			// endpoint honoured OAuth access tokens would pass a different one.
 			Authenticate: makeAuthenticator(cfg.Token),
-			// Serve it here. vov builds the handler with the constructor named
-			// below and mounts it; there is nothing to do after NewApp.
-			Path:         "/mcp",
-			BuildHandler: mcp.NewHandler,
+			// Serve it here. vov builds the handler and mounts it; there is
+			// nothing to do after NewApp.
+			Path: "/mcp",
 		},
 		// How this app resolves the user of a request. Endpoints require one
 		// unless they declare vov.NoAuth(). The valid token comes from the

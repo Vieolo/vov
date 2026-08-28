@@ -113,6 +113,7 @@ type AppConfig struct {
 // Construct it with [NewApp].
 type App struct {
 	mcp             *MCPConfig
+	mcpHandler      http.Handler // built when MCP is declared; see App.MCPHandler
 	mux             *http.ServeMux
 	handler         http.Handler // mux wrapped in ServerWrappers; what is served
 	server          *http.Server
@@ -220,19 +221,19 @@ func NewApp(cfg AppConfig) (*App, error) {
 		if len(seenTool) == 0 {
 			return nil, fmt.Errorf("vov: AppConfig.MCP is set but no endpoint declares an MCPTool")
 		}
+
+		// Built here, whether or not it is mounted here: a tool schema that
+		// cannot be derived is a bad declaration, and belongs in the same
+		// construction error as every other one rather than surfacing later.
+		h, err := app.buildMCPHandler(cfg.MCP)
+		if err != nil {
+			return nil, fmt.Errorf("vov: building the MCP handler: %w", err)
+		}
+		app.mcpHandler = h
+
 		if cfg.MCP.Path != "" {
 			if cfg.MCP.Path[0] != '/' {
 				return nil, fmt.Errorf("vov: AppConfig.MCP.Path %q must begin with %q", cfg.MCP.Path, "/")
-			}
-			if cfg.MCP.BuildHandler == nil {
-				return nil, fmt.Errorf("vov: AppConfig.MCP.Path is set but BuildHandler is nil (pass mcp.NewHandler)")
-			}
-			h, err := cfg.MCP.BuildHandler(app)
-			if err != nil {
-				return nil, fmt.Errorf("vov: building the MCP handler: %w", err)
-			}
-			if h == nil {
-				return nil, fmt.Errorf("vov: AppConfig.MCP.BuildHandler returned a nil handler")
 			}
 			// Registered like any other route, so it sits inside ServerWrappers
 			// and gets the same recovery and logging as everything else.

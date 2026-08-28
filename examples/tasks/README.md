@@ -158,8 +158,7 @@ directive in `go.mod`).
       Name: "tasks", Version: "0.1.0",
       Instructions: "…",
       Authenticate: makeAuthenticator(cfg.Token),
-      Path:         "/mcp",
-      BuildHandler: mcp.NewHandler,
+      Path: "/mcp",
   },
   ```
 

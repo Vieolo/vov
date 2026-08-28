@@ -9,12 +9,12 @@ import (
 	"net/url"
 )
 
-// InvokeRequest describes an in-process call to a declared endpoint.
+// invokeRequest describes an in-process call to a declared endpoint.
 //
 // It is a request in every sense that matters to the endpoint — path parameters
 // resolve, middleware runs, the auth guard enforces the declaration — except
 // that nothing is serialized and no socket is involved.
-type InvokeRequest struct {
+type invokeRequest struct {
 	// Method is the HTTP method to dispatch. Empty means GET.
 	Method string
 
@@ -51,27 +51,27 @@ type InvokeRequest struct {
 
 	// User is the principal the call acts as, already resolved.
 	//
-	// Invoke does not authenticate: it takes this user's identity on trust,
+	// invoke does not authenticate: it takes this user's identity on trust,
 	// because the caller is in-process and has established identity by whatever
 	// means it owns — an OAuth access token for a tool call, a fixture for a
 	// test. Supplying the wrong user here is an authorization bypass, so the
 	// caller must be the thing that verified it.
 	//
-	// What Invoke does still enforce is everything the endpoint declares about
+	// What invoke does still enforce is everything the endpoint declares about
 	// this user: RolesAnyOf, PermissionsAllOf and MinTier are checked by the same
 	// guard a network request meets, with the same 401, 403 and 402 answers. A
 	// nil User is anonymous and is refused by any endpoint requiring auth.
 	User User
 }
 
-// InvokeResult is what the endpoint answered.
-type InvokeResult struct {
+// invokeResult is what the endpoint answered.
+type invokeResult struct {
 	Status int
 	Header http.Header
 	Body   []byte
 }
 
-// Invoke dispatches a request to a declared endpoint in process and returns the
+// invoke dispatches a request to a declared endpoint in process and returns the
 // response, without a network round trip.
 //
 // It exists because two things need the same primitive. A tool call — MCP or
@@ -93,15 +93,15 @@ type InvokeResult struct {
 // that triggered it. Dispatch goes through [App.Mux], which is the same
 // distinction [App.Handler] draws.
 //
-// The dispatched request carries the [InvokeRequest.Mode] the caller named, so
+// The dispatched request carries the [invokeRequest.Mode] the caller named, so
 // middleware can meter and audit the channels apart and an application can shape
 // a response to the one it is answering — see [RequestMode] for where that stops.
 //
 // The returned error reports a request that could not be built — a malformed
 // path, an invalid method. Anything the router or the endpoint decided, 404 and
-// 405 included, comes back as an [InvokeResult] with that status, because those
+// 405 included, comes back as an [invokeResult] with that status, because those
 // are answers rather than failures.
-func (a *App) Invoke(ctx context.Context, req InvokeRequest) (InvokeResult, error) {
+func (a *App) invoke(ctx context.Context, req invokeRequest) (invokeResult, error) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -110,14 +110,14 @@ func (a *App) Invoke(ctx context.Context, req InvokeRequest) (InvokeResult, erro
 		method = http.MethodGet
 	}
 	if req.Path == "" || req.Path[0] != '/' {
-		return InvokeResult{}, fmt.Errorf("vov: Invoke: path %q must begin with %q", req.Path, "/")
+		return invokeResult{}, fmt.Errorf("vov: invoke: path %q must begin with %q", req.Path, "/")
 	}
 	if req.Mode == "" {
-		return InvokeResult{}, fmt.Errorf("vov: Invoke: Mode is required (%q or %q) — only the caller knows which channel it answers for",
+		return invokeResult{}, fmt.Errorf("vov: invoke: Mode is required (%q or %q) — only the caller knows which channel it answers for",
 			RequestModeAPI, RequestModeMCP)
 	}
 	if !req.Mode.valid() {
-		return InvokeResult{}, fmt.Errorf("vov: Invoke: unknown Mode %q (use %q or %q)",
+		return invokeResult{}, fmt.Errorf("vov: invoke: unknown Mode %q (use %q or %q)",
 			string(req.Mode), RequestModeAPI, RequestModeMCP)
 	}
 
@@ -132,7 +132,7 @@ func (a *App) Invoke(ctx context.Context, req InvokeRequest) (InvokeResult, erro
 	}
 	hr, err := http.NewRequestWithContext(ctx, method, target.String(), body)
 	if err != nil {
-		return InvokeResult{}, fmt.Errorf("vov: Invoke: %w", err)
+		return invokeResult{}, fmt.Errorf("vov: invoke: %w", err)
 	}
 
 	// Shape it like a request the server received rather than one a client is
@@ -159,7 +159,7 @@ func (a *App) Invoke(ctx context.Context, req InvokeRequest) (InvokeResult, erro
 	rec := &captureWriter{header: make(http.Header)}
 	a.mux.ServeHTTP(rec, hr)
 
-	return InvokeResult{
+	return invokeResult{
 		Status: rec.statusCode(),
 		Header: rec.header,
 		Body:   rec.body.Bytes(),

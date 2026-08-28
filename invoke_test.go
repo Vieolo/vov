@@ -40,8 +40,8 @@ func TestInvokeRequiresMode(t *testing.T) {
 	var seen RequestMode
 	app := modeProbe(t, &seen)
 
-	if _, err := app.Invoke(context.Background(), InvokeRequest{Path: "/probe"}); err == nil {
-		t.Fatal("Invoke accepted an empty Mode, which is required")
+	if _, err := app.invoke(context.Background(), invokeRequest{Path: "/probe"}); err == nil {
+		t.Fatal("invoke accepted an empty Mode, which is required")
 	}
 	if seen != "" {
 		t.Fatalf("the handler ran for a rejected request, seeing mode %q", seen)
@@ -56,9 +56,9 @@ func TestInvokeRejectsUnknownMode(t *testing.T) {
 	var seen RequestMode
 	app := modeProbe(t, &seen)
 
-	_, err := app.Invoke(context.Background(), InvokeRequest{Path: "/probe", Mode: "network"})
+	_, err := app.invoke(context.Background(), invokeRequest{Path: "/probe", Mode: "network"})
 	if err == nil {
-		t.Fatal("Invoke accepted an unknown Mode")
+		t.Fatal("invoke accepted an unknown Mode")
 	}
 	if seen != "" {
 		t.Fatalf("the handler ran for a rejected request, seeing mode %q", seen)
@@ -75,9 +75,9 @@ func TestInvokeCarriesTheNamedMode(t *testing.T) {
 			var seen RequestMode
 			app := modeProbe(t, &seen)
 
-			res, err := app.Invoke(context.Background(), InvokeRequest{Path: "/probe", Mode: want})
+			res, err := app.invoke(context.Background(), invokeRequest{Path: "/probe", Mode: want})
 			if err != nil {
-				t.Fatalf("Invoke: %v", err)
+				t.Fatalf("invoke: %v", err)
 			}
 			if res.Status != http.StatusOK {
 				t.Fatalf("status %d, want %d", res.Status, http.StatusOK)
