@@ -1,5 +1,16 @@
 # Changelog
 
+## v0.3.0 (2026-08-29)
+- Introduced the scopes, allowing a user having different types of authentications, each with a different scope. You can define the scope as a general rule in the app level with the ability to overwrite them on the endpoint level
+- Pre-authentication middlewares now have access to the headers
+- The `Invoke` function is no longer available. This function was never meant to be public and is considered a bug fix
+- Added `OnToolCall` hook for the MCP, which will be run before the MCP tool calls are dispatched
+
+#### Breaking changes
+- `RequestMode` values are renamed to `RequestModeAPI` and `RequestModeMCP` to better reflect the source
+- Removed the `BuildHandler` from the app-level MCP config
+- `ServerWrappers` and root-level `Authenticator` are moved to the `API` field instead of being on the root `AppConfig` to clear any confusion about their role
+
 ## v0.2.1 (2026-08-28)
 - Added support for built-in MCP, re-using the API endpoints as MCP tools with automated redirection
 - The request's context now have a `RequestMode`, allowing you to distinguish between the network (REST) vs. invoked (MCP) calls
