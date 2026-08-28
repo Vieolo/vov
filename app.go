@@ -79,10 +79,9 @@ type AppConfig struct {
 	// enforce scopes, and what an endpoint that names none requires. See
 	// [ScopePolicy].
 	//
-	// Setting it makes scopes mandatory to think about: any endpoint reachable on
-	// an enforced channel that resolves no requirement is a construction error,
-	// so a new endpoint cannot be added unscoped by accident. [ScopeNone] is how
-	// one opts out on purpose.
+	// Its method maps are what keep a new endpoint governed without anyone
+	// remembering to declare one: the requirement is keyed by method, so an
+	// endpoint added later is covered the moment it exists.
 	Scopes *ScopePolicy
 
 	// Authenticator resolves the user a request acts as. Endpoints require an
@@ -198,9 +197,6 @@ func NewApp(cfg AppConfig) (*App, error) {
 				return nil, fmt.Errorf("vov: route %d (%s): %w", i, p, err)
 			}
 			scope := resolveScope(me.Endpoint, me.Method, cfg.Scopes)
-			if err := requireScopeDecision(me.Endpoint, scope, cfg.Scopes); err != nil {
-				return nil, fmt.Errorf("vov: route %d (%s): %w", i, p, err)
-			}
 			if err := me.Endpoint.Body.Err(); err != nil {
 				return nil, fmt.Errorf("vov: route %d (%s): Body: %w", i, p, err)
 			}

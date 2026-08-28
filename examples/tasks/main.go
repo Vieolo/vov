@@ -110,17 +110,19 @@ func main() {
 			// Deliberately nothing. A health check should not depend on any of it.
 			"bare": {},
 		},
-		// Scopes govern the MCP channel and nothing else, which is the whole
-		// reason ScopeRule carries a mode: this app's tokens are issued by its
-		// OAuth server for assistants, and a browser session has no scope at
-		// all. Enforcing these on the HTTP API would refuse every browser call.
+		// Scopes govern the MCP channel and nothing else: this app's tokens are
+		// issued by its OAuth server for assistants, and a browser session has
+		// no scope at all, so governing the API would refuse every browser call.
 		//
-		// ByMethod is what keeps it from being a thing to remember: a new
-		// mutating endpoint is governed the moment it exists, and one that is
-		// not covered here fails NewApp rather than shipping unscoped.
+		// Keying by method is what keeps it from being a thing to remember: a
+		// new mutating endpoint is governed the moment it exists, because its
+		// method was already spoken for. There is no per-route line to forget.
 		Scopes: &vov.ScopePolicy{
-			Modes: []vov.RequestMode{vov.RequestModeMCP},
-			ByMethod: map[string][]string{
+			// No API map: a browser session carries no scopes, so that channel
+			// has no scope model and is not governed at all. The absence is the
+			// declaration — and an app that did want to gate, say, deletion from
+			// the browser would add an API map with that one method in it.
+			MCP: map[string][]string{
 				http.MethodGet:    {"tasks:read"},
 				http.MethodHead:   {"tasks:read"},
 				http.MethodPost:   {"tasks:write"},

@@ -22,15 +22,14 @@ type ScopeRule struct {
 	// deliberately rather than by omission.
 	AllOf []string
 
-	// Modes limits enforcement to the listed channels. Nil inherits
-	// [ScopePolicy.Modes], and if there is no policy either, enforces on every
-	// channel.
+	// Modes limits enforcement to the listed channels. Nil means every channel
+	// [AppConfig.Scopes] governs, or — with no policy at all — every channel.
 	//
-	// It exists because a scope model usually belongs to one channel. An app
-	// whose OAuth server exists only for its MCP tools has no scopes on a browser
-	// session at all, so enforcing them on the HTTP API would refuse every
-	// browser call; naming the channel is how that is said once instead of being
-	// worked around per endpoint.
+	// Leaving it nil is the usual case, and says the honest thing: an endpoint
+	// override is about *what* this endpoint requires, while which channels have
+	// a scope model is a property of the application, already stated once on the
+	// policy. Naming modes here overrides that, including onto a channel the
+	// policy does not otherwise govern.
 	Modes []RequestMode
 }
 
@@ -50,40 +49,76 @@ func ScopeNone() *ScopeRule { return &ScopeRule{} }
 // endpoint restating it would be exactly the duplication [Route] exists to
 // remove, and across sixty endpoints it is a line somebody eventually forgets.
 type ScopePolicy struct {
-	// ByMethod supplies the requirement for an endpoint that declares none,
-	// keyed by HTTP method: {"GET": {"read"}, "POST": {"write"}}. Use the empty
-	// string for endpoints declared under [Endpoints.Any].
+	// API and MCP are the per-channel defaults, each mapping an HTTP method to
+	// the scopes an endpoint that declares none requires. Use the empty string
+	// for endpoints declared under [Endpoints.Any].
 	//
-	// It is the whole of what vov can derive, and it is optional. vov does not
-	// know an application's scope vocabulary — a token may carry "read", or
-	// "investors:delete", or anything else — so it cannot infer a requirement
-	// from the method the way [MCPTool.ReadOnly] infers read-only-ness. A method
-	// mapping is the most it can honestly offer: an app whose scopes are shaped
-	// that way gets the requirement for free, and an app whose scopes are not
-	// leaves this empty and declares per endpoint.
+	//	MCP: map[string][]string{
+	//	    http.MethodGet:  {"tasks:read"},
+	//	    http.MethodPost: {"tasks:write"},
+	//	}
 	//
-	// Whichever it uses, nothing is silently unscoped: see [ScopePolicy] on the
-	// construction error.
-	ByMethod map[string][]string
-
-	// Modes are the channels this policy enforces on. Nil enforces on every
-	// channel. An endpoint's own [ScopeRule.Modes] overrides it.
-	Modes []RequestMode
+	// A nil map means that channel has no scope model and is not governed, which
+	// is the common case for the HTTP API of an application whose OAuth server
+	// exists for its assistants: a browser session carries no scopes at all, and
+	// governing it would refuse every browser call. Keying by channel is what
+	// makes that a fact you can see in one place rather than assemble from two,
+	// and it lets the channels differ — an API that gates only deletion while
+	// every tool call is scoped is a policy, not a workaround.
+	//
+	// A method absent from a map requires no scopes on that channel, so gating a
+	// single method takes a single entry rather than an enumeration of the rest.
+	//
+	// Keying by method — rather than listing endpoints — is what keeps this from
+	// being a thing to remember. A new mutating endpoint is governed the moment
+	// it exists, because its method was already spoken for; there is no per-route
+	// line for anyone to forget. That is the whole reason a default lives here at
+	// all, and the reason it is the recommended way to use scopes.
+	//
+	// It is nonetheless all vov can derive. vov does not know an application's
+	// scope vocabulary — a token may carry "read", or "investors:delete", or
+	// anything else — so it cannot infer a requirement from the method the way
+	// [MCPTool.ReadOnly] infers read-only-ness. An app whose scopes are
+	// method-shaped gets the requirement for free; one whose scopes are not
+	// leaves these empty and declares [Endpoint.ScopeAllOf] per endpoint.
+	API map[string][]string
+	MCP map[string][]string
 }
+
+// allModes are the channels a policy can govern, in the order the manifest
+// renders them.
+var allModes = []RequestMode{RequestModeAPI, RequestModeMCP}
+
+// byMode returns the policy's method map for one channel.
+func (p *ScopePolicy) byMode(m RequestMode) map[string][]string {
+	if p == nil {
+		return nil
+	}
+	switch m {
+	case RequestModeAPI:
+		return p.API
+	case RequestModeMCP:
+		return p.MCP
+	}
+	return nil
+}
+
+// governs reports whether the policy declares a scope model for m.
+func (p *ScopePolicy) governs(m RequestMode) bool { return p.byMode(m) != nil }
 
 // scopeCheck is a rule resolved against one endpoint at construction, so the
-// guard does no lookup per request.
+// guard does no lookup per request. It is per channel, because the two can
+// require different things.
 type scopeCheck struct {
-	allOf []string
-	modes []RequestMode // nil means every mode
+	byMode map[RequestMode][]string
 }
 
-// enforcedIn reports whether this check applies to a request arriving on m.
-func (s *scopeCheck) enforcedIn(m RequestMode) bool {
-	if s == nil || len(s.allOf) == 0 {
-		return false
+// requiredIn reports the scopes a request arriving on m must carry.
+func (s *scopeCheck) requiredIn(m RequestMode) []string {
+	if s == nil {
+		return nil
 	}
-	return s.modes == nil || slices.Contains(s.modes, m)
+	return s.byMode[m]
 }
 
 // satisfiedBy reports whether the granted scopes cover everything required.
@@ -91,8 +126,8 @@ func (s *scopeCheck) enforcedIn(m RequestMode) bool {
 // A credential that carried none satisfies nothing, which is the fail-closed
 // reading and the only honest one: an endpoint that says it needs a scope has
 // said the bare credential is not enough.
-func (s *scopeCheck) satisfiedBy(granted []string) bool {
-	for _, want := range s.allOf {
+func satisfiedBy(granted, required []string) bool {
+	for _, want := range required {
 		if !slices.Contains(granted, want) {
 			return false
 		}
@@ -103,9 +138,10 @@ func (s *scopeCheck) satisfiedBy(granted []string) bool {
 // resolveScope resolves an endpoint's effective scope requirement.
 //
 // The endpoint's own rule wins outright when it declares one — including an empty
-// [ScopeNone], which is a decision and not an absence. Otherwise the policy's
-// per-method default applies. Modes fall back separately, so an endpoint can
-// override *what* it requires without also having to restate *where*.
+// [ScopeNone], which is a decision and not an absence. Otherwise each governed
+// channel supplies its own per-method default, and the two channels need not
+// agree: an API that gates only deletion while every tool call is scoped resolves
+// to a requirement on MCP and none on the API for the same endpoint.
 func resolveScope(e Endpoint, method string, p *ScopePolicy) *scopeCheck {
 	// An open endpoint resolves no credential, so there is nothing to carry a
 	// scope and no guard to check one. A default must not reach it: the manifest
@@ -115,34 +151,40 @@ func resolveScope(e Endpoint, method string, p *ScopePolicy) *scopeCheck {
 		return nil
 	}
 
-	var modes []RequestMode
-	if p != nil {
-		modes = p.Modes
-	}
+	byMode := map[RequestMode][]string{}
 
+	// The endpoint's own rule wins outright, on every channel it applies to.
 	if r := e.ScopeAllOf; r != nil {
-		if r.Modes != nil {
-			modes = r.Modes
+		if len(r.AllOf) == 0 {
+			return nil // ScopeNone: a decision, and the decision is "none"
 		}
-		return &scopeCheck{allOf: r.AllOf, modes: modes}
-	}
-	if p != nil {
-		if allOf, ok := p.ByMethod[method]; ok {
-			return &scopeCheck{allOf: allOf, modes: modes}
+		modes := r.Modes
+		if modes == nil {
+			// Say what, and let the policy have said where. With no policy at
+			// all there is nothing to inherit, so it governs everywhere.
+			for _, m := range allModes {
+				if p == nil || p.governs(m) {
+					modes = append(modes, m)
+				}
+			}
+		}
+		for _, m := range modes {
+			byMode[m] = r.AllOf
+		}
+	} else {
+		// Otherwise each governed channel supplies its own per-method default,
+		// and they need not agree.
+		for _, m := range allModes {
+			if allOf, ok := p.byMode(m)[method]; ok && len(allOf) > 0 {
+				byMode[m] = allOf
+			}
 		}
 	}
-	return nil
-}
 
-// policyModes reports the channels a policy enforces on, expanded.
-func policyModes(p *ScopePolicy) []RequestMode {
-	if p == nil {
+	if len(byMode) == 0 {
 		return nil
 	}
-	if p.Modes == nil {
-		return []RequestMode{RequestModeAPI, RequestModeMCP}
-	}
-	return p.Modes
+	return &scopeCheck{byMode: byMode}
 }
 
 // validateScopes rejects a scope declaration that cannot mean what it says.
@@ -188,30 +230,4 @@ func ScopesFrom(ctx context.Context) ([]string, bool) {
 // contextWithScopes returns a copy of ctx carrying the granted scopes.
 func contextWithScopes(ctx context.Context, scopes []string) context.Context {
 	return context.WithValue(ctx, scopeContextKey{}, scopes)
-}
-
-// requireScopeDecision rejects an endpoint that a policy governs but that nothing
-// gave a requirement.
-//
-// This is what makes [AppConfig.Scopes] worth setting rather than being one more
-// optional field. Without it, adding a mutating endpoint and forgetting its scope
-// leaves a read-only credential able to call it — an omission that is invisible
-// in review, because the absence of a line is what is wrong. With it, the build
-// stops and names the endpoint.
-//
-// Reachability is decided per channel: every endpoint answers the HTTP API, but
-// only one carrying an [MCPTool] can be reached over MCP, so a policy scoped to
-// the MCP channel says nothing about the rest of the app.
-func requireScopeDecision(e Endpoint, resolved *scopeCheck, p *ScopePolicy) error {
-	if p == nil || resolved != nil || !e.AuthMode.required() {
-		return nil
-	}
-	for _, m := range policyModes(p) {
-		if m == RequestModeMCP && e.MCPTool == nil {
-			continue // not reachable on that channel
-		}
-		return fmt.Errorf("AppConfig.Scopes governs the %s channel but this endpoint declares no ScopeAllOf "+
-			"and no ScopePolicy.ByMethod entry covers its method (declare vov.ScopeNone() to require none)", m)
-	}
-	return nil
 }

@@ -95,16 +95,26 @@ func manifestLine(path string, me methodEndpoint, policy *ScopePolicy) string {
 	// The effective scope requirement, defaulted rule included: "which endpoints
 	// a read-only grant cannot reach" is the question this column exists to
 	// answer, and it is the derived ones a reviewer is least likely to know.
-	if sc := resolveScope(me.Endpoint, me.Method, policy); sc != nil && len(sc.allOf) > 0 {
-		field := "scopes-all:" + strings.Join(sc.allOf, ",")
-		if sc.modes != nil {
-			labels := make([]string, len(sc.modes))
-			for i, m := range sc.modes {
-				labels[i] = string(m)
+	// Channels requiring the same set collapse onto one field; channels that
+	// differ get one each, because a policy that governs them differently is
+	// exactly what a reviewer must not have to infer.
+	if sc := resolveScope(me.Endpoint, me.Method, policy); sc != nil {
+		seen := map[string][]string{}
+		var order []string
+		for _, m := range allModes {
+			want := sc.requiredIn(m)
+			if len(want) == 0 {
+				continue
 			}
-			field += "@" + strings.Join(labels, "|")
+			key := strings.Join(want, ",")
+			if _, ok := seen[key]; !ok {
+				order = append(order, key)
+			}
+			seen[key] = append(seen[key], string(m))
 		}
-		fields = append(fields, field)
+		for _, key := range order {
+			fields = append(fields, "scopes-all:"+key+"@"+strings.Join(seen[key], "|"))
+		}
 	}
 	if roles := me.Endpoint.RolesAnyOf; len(roles) > 0 {
 		fields = append(fields, "roles-any:"+strings.Join(roles, "|"))

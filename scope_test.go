@@ -138,7 +138,7 @@ func (roleProbeUser) Tier() int                 { return 0 }
 // ByMethod mechanism exists for: an endpoint that says nothing is still governed,
 // so a new mutating route cannot ship unscoped because someone forgot a line.
 func TestPolicyDefaultGovernsAnUndeclaredEndpoint(t *testing.T) {
-	policy := &ScopePolicy{ByMethod: map[string][]string{
+	policy := &ScopePolicy{API: map[string][]string{
 		http.MethodGet:  {"read"},
 		http.MethodPost: {"write"},
 	}}
@@ -155,21 +155,20 @@ func TestPolicyDefaultGovernsAnUndeclaredEndpoint(t *testing.T) {
 	}
 }
 
-// TestPolicyRejectsAnUngovernedEndpoint is the construction error that makes the
-// policy worth setting. The omission it catches is invisible in review, because
-// what is wrong is the absence of a line.
-func TestPolicyRejectsAnUngovernedEndpoint(t *testing.T) {
-	_, err := NewApp(AppConfig{
-		Scopes:        &ScopePolicy{ByMethod: map[string][]string{http.MethodGet: {"read"}}},
-		Authenticator: func(AuthResponse, *http.Request) (User, error) { return scopeUser{}, nil },
-		Routes: []Route{{
-			Path: "/probe",
-			// POST is covered by nothing: not by the endpoint, not by ByMethod.
-			Endpoints: Endpoints{POST: Endpoint{Handler: func(http.ResponseWriter, *http.Request) {}}},
-		}},
-	})
-	if err == nil {
-		t.Fatal("NewApp accepted an endpoint the policy governs but nothing scopes")
+// TestUnlistedMethodIsUngoverned: a method absent from a channel's map requires
+// no scopes there, so gating one method costs one entry and not an enumeration
+// of every other. It is what lets a policy govern its channels differently.
+func TestUnlistedMethodIsUngoverned(t *testing.T) {
+	policy := &ScopePolicy{API: map[string][]string{http.MethodPost: {"write"}}}
+	app := scopedApp(t, nil, policy, nil) // a credential carrying nothing
+
+	if got := getStatus(t, app); got != http.StatusOK {
+		t.Errorf("GET, unlisted: got %d, want 200", got)
+	}
+	rec := httptest.NewRecorder()
+	app.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/probe", nil))
+	if rec.Code != http.StatusForbidden {
+		t.Errorf("POST, listed: got %d, want 403", rec.Code)
 	}
 }
 
@@ -177,7 +176,7 @@ func TestPolicyRejectsAnUngovernedEndpoint(t *testing.T) {
 // endpoint that means "no scope needed" says so instead of being silent.
 func TestScopeNoneOptsOut(t *testing.T) {
 	app, err := NewApp(AppConfig{
-		Scopes:        &ScopePolicy{ByMethod: map[string][]string{http.MethodGet: {"read"}}},
+		Scopes:        &ScopePolicy{API: map[string][]string{http.MethodGet: {"read"}}},
 		Authenticator: func(AuthResponse, *http.Request) (User, error) { return scopeUser{}, nil },
 		Routes: []Route{{
 			Path:      "/probe",
@@ -238,5 +237,59 @@ func TestScopesReachTheHandler(t *testing.T) {
 	}
 	if len(seen) != 2 || seen[0] != "read" || seen[1] != "write" {
 		t.Errorf("handler saw scopes %v, want [read write]", seen)
+	}
+}
+
+// TestChannelsCanBeGovernedDifferently is what keying the policy by channel buys
+// that a single method map plus a mode list could not express at all: an HTTP API
+// that gates only deletion, while every tool call is scoped.
+func TestChannelsCanBeGovernedDifferently(t *testing.T) {
+	policy := &ScopePolicy{
+		API: map[string][]string{http.MethodDelete: {"tasks:write"}},
+		MCP: map[string][]string{
+			http.MethodGet:    {"tasks:read"},
+			http.MethodDelete: {"tasks:write"},
+		},
+	}
+	var app *App
+	app, err := NewApp(AppConfig{
+		Scopes: policy,
+		Authenticator: func(resp AuthResponse, r *http.Request) (User, error) {
+			return scopeUser{}, nil // a credential carrying nothing
+		},
+		Routes: []Route{{
+			Path: "/probe",
+			Endpoints: Endpoints{
+				GET:    Endpoint{Handler: func(http.ResponseWriter, *http.Request) {}, MCPTool: &MCPTool{Name: "get_probe"}},
+				DELETE: Endpoint{Handler: func(http.ResponseWriter, *http.Request) {}, MCPTool: &MCPTool{Name: "del_probe"}},
+			},
+		}},
+		MCP: &MCPConfig{
+			Name: "probe", Version: "0", Path: "",
+			Authenticate: func(AuthResponse, *http.Request) (User, error) { return scopeUser{}, nil },
+		},
+	})
+	if err != nil {
+		t.Fatalf("NewApp: %v", err)
+	}
+
+	// GET is ungoverned on the API and governed on MCP — the same endpoint,
+	// the same scopeless credential, two answers.
+	if got := getStatus(t, app); got != http.StatusOK {
+		t.Errorf("API GET (ungoverned): got %d, want 200", got)
+	}
+	res, err := app.invoke(context.Background(), invokeRequest{Path: "/probe", Mode: RequestModeMCP, User: scopeUser{}})
+	if err != nil {
+		t.Fatalf("invoke: %v", err)
+	}
+	if res.Status != http.StatusForbidden {
+		t.Errorf("MCP GET (governed): got %d, want 403", res.Status)
+	}
+
+	// DELETE is governed on both, so the API refuses it too.
+	rec := httptest.NewRecorder()
+	app.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodDelete, "/probe", nil))
+	if rec.Code != http.StatusForbidden {
+		t.Errorf("API DELETE (governed): got %d, want 403", rec.Code)
 	}
 }
