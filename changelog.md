@@ -1,10 +1,16 @@
 # Changelog
 
+## v0.3.1 (2026-08-29)
+- Body and query fields can now carry a description
+- Path parameters gained `Endpoint.PathParams`, giving a route wildcard a caller-facing name and a description
+- Documenting a wildcard the route does not declare, or giving two wildcards the same caller-facing name, is now a construction error
+- The route manifest gained a `param:` column
+
 ## v0.3.0 (2026-08-29)
 - Introduced the scopes, allowing a user having different types of authentications, each with a different scope. You can define the scope as a general rule in the app level with the ability to overwrite them on the endpoint level
 - Pre-authentication middlewares now have access to the headers
 - The `Invoke` function is no longer available. This function was never meant to be public and is considered a bug fix
-- Added `OnToolCall` hook for the MCP, which will be run before the MCP tool calls are dispatched
+- Added `OnToolCall` hook for the MCP, which observes every tool call after it has finished, including the ones rejected before they reached an endpoint, which no middleware can see. It records the outcome, status and duration, cannot fail the call, and recovers a panicking tool handler (which `ServerWrappers` cannot: the protocol SDK dispatches each call on its own goroutine)
 
 #### Breaking changes
 - `RequestMode` values are renamed to `RequestModeAPI` and `RequestModeMCP` to better reflect the source

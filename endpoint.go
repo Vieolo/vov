@@ -55,6 +55,15 @@ type Endpoint struct {
 	// default on purpose.
 	ScopeAllOf *ScopeRule
 
+	// PathParams documents this route's wildcards, keyed by the wildcard name —
+	// see [PathParam]. It is how a path parameter gets a caller-facing name and a
+	// description, which a body or query field carries on its Go struct field and
+	// a wildcard has nowhere else to put.
+	//
+	// Documenting a name the route does not declare is a construction error, so a
+	// typo fails the build rather than quietly documenting nothing.
+	PathParams map[string]PathParam
+
 	// Body describes the shape of the request body, built with [BodyOf] from the
 	// type the handler decodes into. Query does the same for the query string,
 	// with [QueryOf].
@@ -105,6 +114,7 @@ func (e Endpoint) declared() bool {
 		len(e.PermissionsAllOf) > 0 ||
 		e.MinTier != 0 ||
 		e.ScopeAllOf != nil ||
+		len(e.PathParams) > 0 ||
 		e.Body != nil ||
 		e.Query != nil ||
 		e.MCPTool != nil

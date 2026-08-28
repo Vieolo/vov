@@ -336,8 +336,9 @@ func checkMCP(r *report) {
 	r.check("     required derives from the vov tag",
 		dig(tools["create_task"], "inputSchema", "required"), []any{"title"})
 	// A path parameter becomes a required argument.
+	// ...under the name the endpoint declared for it, not the route wildcard.
 	r.check("     get_task takes its path param",
-		dig(tools["get_task"], "inputSchema", "required"), []any{"id"})
+		dig(tools["get_task"], "inputSchema", "required"), []any{"taskId"})
 	// ReadOnly is derived from the HTTP method.
 	r.check("     GET tool is read-only", dig(tools["list_tasks"], "annotations", "readOnlyHint"), true)
 	r.check("     POST tool is not", dig(tools["create_task"], "annotations", "readOnlyHint"), false)
@@ -347,12 +348,13 @@ func checkMCP(r *report) {
 	var created map[string]any
 	_ = json.Unmarshal([]byte(text), &created)
 	r.check("     handler ran, owner from the token", created["owner"], "ramtin")
+	newTaskID := fmt.Sprint(created["id"])
 
 	isErr, _ = callTool("list_tasks", map[string]any{}, tokMember)
 	r.check("MCP  list_tasks", isErr, false)
 
 	// The tool meets the same policy the endpoint declares.
-	isErr, text = callTool("delete_task", map[string]any{"id": "1"}, tokMember)
+	isErr, text = callTool("delete_task", map[string]any{"taskId": "1"}, tokMember)
 	r.check("MCP  delete_task (no role)", isErr && strings.Contains(text, "may not perform"), true)
 
 	// And the paywall answers with something a model can act on.
@@ -368,6 +370,28 @@ func checkMCP(r *report) {
 	r.check("MCP  list_tasks (read-only grant)", isErr, false)
 	isErr, _ = callTool("create_task", map[string]any{"title": "nope"}, tokReadOnly)
 	r.check("MCP  create_task (read-only grant)", isErr, true)
+
+	// A path parameter reaches the model under its declared name, not the route
+	// wildcard, and carries the prose that says where the value comes from.
+	getTaskSchema := toolSchema("get_task")
+	r.check("     path param uses its alias", sortedKeys(dig(getTaskSchema, "properties")), "[taskId]")
+	r.check("     path param carries prose",
+		strings.Contains(fmt.Sprint(dig(getTaskSchema, "properties", "taskId", "description")), "list_tasks"), true)
+	// ...and the alias is what the tool actually accepts, end to end: the
+	// endpoint still reads r.PathValue("id"), which is the point of an alias.
+	isErr, text = callTool("get_task", map[string]any{"taskId": newTaskID}, tokMember)
+	r.check("MCP  get_task (by alias)", isErr, false)
+	r.check("     reached the handler", strings.Contains(text, "from an assistant"), true)
+	isErr, text = callTool("get_task", map[string]any{"id": newTaskID}, tokMember)
+	r.check("MCP  get_task (wildcard name is refused)",
+		isErr && strings.Contains(text, `missing required argument "taskId"`), true)
+
+	// Typed fields carry their jsonschema prose through to the tool schema.
+	createSchema := toolSchema("create_task")
+	r.check("     body field carries prose",
+		strings.Contains(fmt.Sprint(dig(createSchema, "properties", "title", "description")), "imperative"), true)
+	r.check("     query field carries prose",
+		strings.Contains(fmt.Sprint(dig(toolSchema("list_tasks"), "properties", "owner", "description")), "matched exactly"), true)
 
 	// A tool call carries the transport's headers into the endpoint, so the
 	// app's ordinary Pre middleware reaches them. This is what a dedicated MCP
@@ -456,6 +480,33 @@ func rpc(method string, params any, token string, extra ...reqOpt) map[string]an
 	var out map[string]any
 	_ = json.Unmarshal(res.Body, &out)
 	return out
+}
+
+// toolSchema returns one tool's declared inputSchema from tools/list.
+func toolSchema(name string) any {
+	out := rpc("tools/list", map[string]any{}, tokMember)
+	tools, _ := dig(out, "result", "tools").([]any)
+	for _, t := range tools {
+		m, ok := t.(map[string]any)
+		if ok && m["name"] == name {
+			return m["inputSchema"]
+		}
+	}
+	return nil
+}
+
+// sortedKeys renders a JSON object's keys in a stable order.
+func sortedKeys(v any) string {
+	m, ok := v.(map[string]any)
+	if !ok {
+		return "<not an object>"
+	}
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	return fmt.Sprint(keys)
 }
 
 // callTool invokes one tool and returns whether it reported an error, with its

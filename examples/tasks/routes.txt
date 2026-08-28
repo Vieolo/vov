@@ -3,7 +3,7 @@
 #
 #   METHOD  PATH  auth:<mode>  stack:<name>  [scopes-all:x,y@modes]
 #                 [roles-any:a|b]  [perms-all:x,y]  [min-tier:N]
-#                 [query:Type]  [body:Type]  [mcp-tool:name]
+#                 [query:Type]  [body:Type]  [param:wildcard=name]  [mcp-tool:name]
 #
 # scopes-all requires EVERY listed scope of the CREDENTIAL, on the channels
 #            after the @ — a delegated token may hold fewer scopes than its
@@ -12,12 +12,14 @@
 # perms-all  requires EVERY one of the listed permissions      (, reads as "and")
 # min-tier   requires User.Tier() >= N; refused with 402, not 403
 # query/body the Go type the input shape was declared from
+# param      a path wildcard a caller sends under a different name; shown only
+#            when the two differ, since that is the second name for one value
 # mcp-tool   the endpoint is callable by an AI assistant under this name
 
 GET     /healthz                       auth:none  stack:bare
 GET     /reports                       auth:required  stack:default  scopes-all:tasks:read@mcp  roles-any:member  min-tier:2  mcp-tool:get_reports
 GET     /tasks                         auth:required  stack:default  scopes-all:tasks:read@mcp  query:listTasksQuery  mcp-tool:list_tasks
 POST    /tasks                         auth:required  stack:json  scopes-all:tasks:write@mcp  perms-all:tasks.write  body:createTaskInput  mcp-tool:create_task
-GET     /tasks/{id}                    auth:required  stack:default  scopes-all:tasks:read@mcp  mcp-tool:get_task
-DELETE  /tasks/{id}                    auth:required  stack:default  scopes-all:tasks:write@mcp  roles-any:admin|owner  perms-all:tasks.write  mcp-tool:delete_task
+GET     /tasks/{id}                    auth:required  stack:default  scopes-all:tasks:read@mcp  param:id=taskId  mcp-tool:get_task
+DELETE  /tasks/{id}                    auth:required  stack:default  scopes-all:tasks:write@mcp  roles-any:admin|owner  perms-all:tasks.write  param:id=taskId  mcp-tool:delete_task
 POST    /webhook                       auth:none  stack:webhook
