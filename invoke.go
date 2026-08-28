@@ -33,6 +33,22 @@ type InvokeRequest struct {
 	// Header carries any additional request headers.
 	Header http.Header
 
+	// Mode is the channel this call presents as, reaching middleware and the
+	// handler through [ModeFrom]. It is required.
+	//
+	// It is the caller's to state because dispatching in process and standing in
+	// for a channel are not the same fact, and only the caller knows the second
+	// one. A tool server is answering [RequestModeMCP]; a runner exercising the
+	// HTTP API dispatches the same way but is standing in for
+	// [RequestModeAPI], and saying otherwise would make every mode-keyed
+	// decision downstream true of the wrong channel.
+	//
+	// There is deliberately no default. Whichever one were chosen, the empty
+	// value would mean something different here than it does to [ModeFrom],
+	// where absence is what an ordinary network request looks like — and a field
+	// that means one channel by omission is a channel nobody decided on.
+	Mode RequestMode
+
 	// User is the principal the call acts as, already resolved.
 	//
 	// Invoke does not authenticate: it takes this user's identity on trust,
@@ -77,9 +93,9 @@ type InvokeResult struct {
 // that triggered it. Dispatch goes through [App.Mux], which is the same
 // distinction [App.Handler] draws.
 //
-// The dispatched request carries [RequestModeInvoke], so middleware can meter
-// and audit the two channels apart. Handlers should read that, not branch on it
-// — see [RequestMode].
+// The dispatched request carries the [InvokeRequest.Mode] the caller named, so
+// middleware can meter and audit the channels apart and an application can shape
+// a response to the one it is answering — see [RequestMode] for where that stops.
 //
 // The returned error reports a request that could not be built — a malformed
 // path, an invalid method. Anything the router or the endpoint decided, 404 and
@@ -95,6 +111,14 @@ func (a *App) Invoke(ctx context.Context, req InvokeRequest) (InvokeResult, erro
 	}
 	if req.Path == "" || req.Path[0] != '/' {
 		return InvokeResult{}, fmt.Errorf("vov: Invoke: path %q must begin with %q", req.Path, "/")
+	}
+	if req.Mode == "" {
+		return InvokeResult{}, fmt.Errorf("vov: Invoke: Mode is required (%q or %q) — only the caller knows which channel it answers for",
+			RequestModeAPI, RequestModeMCP)
+	}
+	if !req.Mode.valid() {
+		return InvokeResult{}, fmt.Errorf("vov: Invoke: unknown Mode %q (use %q or %q)",
+			string(req.Mode), RequestModeAPI, RequestModeMCP)
 	}
 
 	target := &url.URL{Path: req.Path}
@@ -130,7 +154,7 @@ func (a *App) Invoke(ctx context.Context, req InvokeRequest) (InvokeResult, erro
 	// nothing outside this package can forge either — which is what keeps the
 	// guard's trust in the first one safe, and the second one worth metering on.
 	ictx := context.WithValue(hr.Context(), invokeUserKey{}, invokeUser{user: req.User})
-	hr = hr.WithContext(withMode(ictx, RequestModeInvoke))
+	hr = hr.WithContext(withMode(ictx, req.Mode))
 
 	rec := &captureWriter{header: make(http.Header)}
 	a.mux.ServeHTTP(rec, hr)
