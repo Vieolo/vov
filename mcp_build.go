@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
-	"slices"
 	"strings"
 	"time"
 
@@ -82,7 +81,7 @@ func (a *App) mcpTools(cfg *MCPConfig) ([]mcpsrv.Tool, error) {
 // construction error, since the flat argument object could not carry both.
 func (a *App) bindTool(path, method string, ep Endpoint, cfg *MCPConfig) (mcpsrv.Tool, error) {
 	decl := ep.MCPTool
-	params := pathParams(path)
+	params := resolvePathArgs(path, ep)
 
 	// A tool takes one flat object of arguments: the path parameters, the
 	// declared query fields, and the declared body fields together. Flat is what
@@ -92,15 +91,19 @@ func (a *App) bindTool(path, method string, ep Endpoint, cfg *MCPConfig) (mcpsrv
 	var required, queryNames []string
 
 	for _, p := range params {
-		props[p] = map[string]any{"type": "string"}
-		required = append(required, p) // a path parameter is never optional
+		prop := map[string]any{"type": "string"}
+		if p.description != "" {
+			prop["description"] = p.description
+		}
+		props[p.name] = prop
+		required = append(required, p.name) // a path parameter is never optional
 	}
 	if q := ep.Query; q != nil {
 		for _, f := range q.Fields {
 			if _, clash := props[f.Name]; clash {
 				return mcpsrv.Tool{}, fmt.Errorf("query field %q collides with a path parameter of the same name", f.Name)
 			}
-			props[f.Name] = f.Schema.JSONSchema()
+			props[f.Name] = f.JSONSchema()
 			queryNames = append(queryNames, f.Name)
 			if f.Required {
 				required = append(required, f.Name)
@@ -115,7 +118,7 @@ func (a *App) bindTool(path, method string, ep Endpoint, cfg *MCPConfig) (mcpsrv
 			if _, clash := props[f.Name]; clash {
 				return mcpsrv.Tool{}, fmt.Errorf("body field %q collides with a path parameter or query field of the same name", f.Name)
 			}
-			props[f.Name] = f.Schema.JSONSchema()
+			props[f.Name] = f.JSONSchema()
 			if f.Required {
 				required = append(required, f.Name)
 			}
@@ -152,7 +155,7 @@ type boundTool struct {
 	name       string
 	method     string
 	path       string
-	pathParams []string
+	pathParams []pathArg
 	queryNames []string
 }
 
@@ -270,16 +273,18 @@ func decodeToolArgs(raw json.RawMessage) (map[string]json.RawMessage, error) {
 func (t boundTool) splitArgs(args map[string]json.RawMessage) (path string, query url.Values, body []byte, err error) {
 	path = t.path
 	for _, p := range t.pathParams {
-		raw, ok := args[p]
+		// Looked up by the name the caller uses, substituted by the name the
+		// pattern uses. They differ whenever the endpoint declared an alias.
+		raw, ok := args[p.name]
 		if !ok {
-			return "", nil, nil, fmt.Errorf("missing required argument %q", p)
+			return "", nil, nil, fmt.Errorf("missing required argument %q", p.name)
 		}
 		v, err := scalarArg(raw)
 		if err != nil {
-			return "", nil, nil, fmt.Errorf("argument %q: %w", p, err)
+			return "", nil, nil, fmt.Errorf("argument %q: %w", p.name, err)
 		}
-		path = strings.Replace(path, "{"+p+"}", url.PathEscape(v), 1)
-		delete(args, p)
+		path = strings.Replace(path, "{"+p.wildcard+"}", url.PathEscape(v), 1)
+		delete(args, p.name)
 	}
 
 	if len(t.queryNames) > 0 {
@@ -325,26 +330,4 @@ func scalarArg(raw json.RawMessage) (string, error) {
 	default:
 		return "", fmt.Errorf("must be a string, number or boolean")
 	}
-}
-
-// pathParams returns the wildcard names in a ServeMux pattern, in order.
-func pathParams(path string) []string {
-	var out []string
-	for rest := path; ; {
-		open := strings.Index(rest, "{")
-		if open < 0 {
-			break
-		}
-		rest = rest[open+1:]
-		close := strings.Index(rest, "}")
-		if close < 0 {
-			break
-		}
-		name := strings.TrimSuffix(rest[:close], "...")
-		if name != "" && !slices.Contains(out, name) {
-			out = append(out, name)
-		}
-		rest = rest[close+1:]
-	}
-	return out
 }

@@ -59,18 +59,34 @@ func collectionEndpoints() vov.Endpoints {
 	}
 }
 
+// taskIDParam documents the {id} wildcard once, for both methods of the URL.
+//
+// The alias is the point. `{id}` is unambiguous in /tasks/{id}, where the path
+// supplies the noun; offered to a model choosing between tools that each take
+// the id of a different thing, it is not. The description says where the value
+// comes from, which is what turns two tools into a chain the assistant can
+// follow without asking the user to paste an id.
+var taskIDParam = map[string]vov.PathParam{
+	"id": {
+		Name:        "taskId",
+		Description: "the task's id, as returned by list_tasks",
+	},
+}
+
 // itemEndpoints serves /tasks/{id}.
 func itemEndpoints() vov.Endpoints {
 	return vov.Endpoints{
 		GET: vov.Endpoint{
-			Handler: getTask,
-			MCPTool: &vov.MCPTool{Name: "get_task", Description: getTaskDoc},
+			Handler:    getTask,
+			PathParams: taskIDParam,
+			MCPTool:    &vov.MCPTool{Name: "get_task", Description: getTaskDoc},
 		},
 		// Deleting needs both: one of the listed roles (any-of) and every listed
 		// permission (all-of). Reading the same URL needs neither — which is the
 		// point of configuring auth per method rather than per URL.
 		DELETE: vov.Endpoint{
 			Handler:          deleteTask,
+			PathParams:       taskIDParam,
 			RolesAnyOf:       []string{"admin", "owner"},
 			PermissionsAllOf: []string{"tasks.write"},
 			// The tool inherits the role and permission above: an assistant
@@ -84,8 +100,8 @@ func itemEndpoints() vov.Endpoints {
 
 // listTasksQuery declares what GET /tasks accepts in its query string.
 type listTasksQuery struct {
-	Owner string `json:"owner"`
-	Limit int    `json:"limit"`
+	Owner string `json:"owner" jsonschema:"filter to one owner, matched exactly against the name a task was created under"`
+	Limit int    `json:"limit" jsonschema:"how many tasks to return; omit for all of them"`
 }
 
 func listTasks(w http.ResponseWriter, r *http.Request) {
@@ -103,10 +119,13 @@ func listTasks(w http.ResponseWriter, r *http.Request) {
 // same thing for it. Notes is a pointer, so the handler can tell an absent field
 // from an explicit null — the distinction a PATCH needs, and the reason vov
 // describes the shape rather than decoding it for you.
+// The two tags do different jobs and are deliberately separate: vov's own is a
+// list of options, and a description is free text that would need escaping to
+// live in one.
 type createTaskInput struct {
-	Title string   `json:"title" vov:"required"`
-	Tags  []string `json:"tags"`
-	Notes *string  `json:"notes"`
+	Title string   `json:"title" vov:"required" jsonschema:"a short imperative summary, e.g. \"write the tests\""`
+	Tags  []string `json:"tags" jsonschema:"free-form labels; reuse ones already on other tasks where they fit"`
+	Notes *string  `json:"notes" jsonschema:"longer context, if the title alone would not be enough later"`
 }
 
 func createTask(w http.ResponseWriter, r *http.Request) {

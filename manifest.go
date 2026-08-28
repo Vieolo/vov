@@ -14,7 +14,7 @@ const manifestHeader = `# vov route manifest — every endpoint this app declare
 #
 #   METHOD  PATH  auth:<mode>  stack:<name>  [scopes-all:x,y@modes]
 #                 [roles-any:a|b]  [perms-all:x,y]  [min-tier:N]
-#                 [query:Type]  [body:Type]  [mcp-tool:name]
+#                 [query:Type]  [body:Type]  [param:wildcard=name]  [mcp-tool:name]
 #
 # scopes-all requires EVERY listed scope of the CREDENTIAL, on the channels
 #            after the @ — a delegated token may hold fewer scopes than its
@@ -23,6 +23,8 @@ const manifestHeader = `# vov route manifest — every endpoint this app declare
 # perms-all  requires EVERY one of the listed permissions      (, reads as "and")
 # min-tier   requires User.Tier() >= N; refused with 402, not 403
 # query/body the Go type the input shape was declared from
+# param      a path wildcard a caller sends under a different name; shown only
+#            when the two differ, since that is the second name for one value
 # mcp-tool   the endpoint is callable by an AI assistant under this name
 
 `
@@ -134,6 +136,14 @@ func manifestLine(path string, me methodEndpoint, policy *ScopePolicy) string {
 	}
 	if b := me.Endpoint.Body; b != nil {
 		fields = append(fields, "body:"+b.TypeName)
+	}
+	// An aliased path parameter is two names for one value. The alias is a
+	// deliberate choice, so it is rendered — buried, it is the kind of thing a
+	// reader later finds by surprise.
+	for _, arg := range resolvePathArgs(path, me.Endpoint) {
+		if arg.name != arg.wildcard {
+			fields = append(fields, "param:"+arg.wildcard+"="+arg.name)
+		}
 	}
 	// Which endpoints an assistant can reach is worth a reviewer's attention in
 	// its own right: it is a second audience for the same policy.

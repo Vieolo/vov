@@ -233,6 +233,9 @@ func NewApp(cfg AppConfig) (*App, error) {
 			if err := validateAuth(me.Endpoint); err != nil {
 				return nil, fmt.Errorf("vov: route %d (%s): %w", i, p, err)
 			}
+			if err := validatePathParams(r.Path, me.Endpoint); err != nil {
+				return nil, fmt.Errorf("vov: route %d (%s): %w", i, p, err)
+			}
 			if err := validateScopes(me.Endpoint); err != nil {
 				return nil, fmt.Errorf("vov: route %d (%s): %w", i, p, err)
 			}
