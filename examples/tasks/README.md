@@ -138,14 +138,14 @@ directive in `go.mod`).
   the manifest shows a changed line.
 
 - **The same endpoints as MCP tools** — an endpoint becomes callable by an AI
-  assistant by carrying a `Tool`, right where it is already declared:
+  assistant by carrying an `MCPTool`, right where it is already declared:
 
   ```go
   DELETE: vov.Endpoint{
       Handler:          deleteTask,
       RolesAnyOf:       []string{"admin", "owner"},
       PermissionsAllOf: []string{"tasks.write"},
-      Tool:             &vov.Tool{Name: "delete_task", Description: deleteTaskDoc},
+      MCPTool:          &vov.MCPTool{Name: "delete_task", Description: deleteTaskDoc},
   },
   ```
 

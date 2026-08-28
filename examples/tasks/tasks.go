@@ -43,7 +43,7 @@ func collectionEndpoints() vov.Endpoints {
 			Query:   vov.QueryOf[listTasksQuery](),
 			// One line makes this endpoint callable by an assistant. Its method,
 			// path, arguments and policy are the ones declared right here.
-			Tool: &vov.Tool{Name: "list_tasks", Description: listTasksDoc},
+			MCPTool: &vov.MCPTool{Name: "list_tasks", Description: listTasksDoc},
 		},
 		// Reading is open to any authenticated user; writing takes a permission.
 		// Same URL, different wrapping and different authority — per method.
@@ -53,8 +53,8 @@ func collectionEndpoints() vov.Endpoints {
 			PermissionsAllOf: []string{"tasks.write"},
 			// The same type createTask decodes into — and the same schema the
 			// assistant is given for its arguments.
-			Body: vov.BodyOf[createTaskInput](),
-			Tool: &vov.Tool{Name: "create_task", Description: createTaskDoc},
+			Body:    vov.BodyOf[createTaskInput](),
+			MCPTool: &vov.MCPTool{Name: "create_task", Description: createTaskDoc},
 		},
 	}
 }
@@ -64,7 +64,7 @@ func itemEndpoints() vov.Endpoints {
 	return vov.Endpoints{
 		GET: vov.Endpoint{
 			Handler: getTask,
-			Tool:    &vov.Tool{Name: "get_task", Description: getTaskDoc},
+			MCPTool: &vov.MCPTool{Name: "get_task", Description: getTaskDoc},
 		},
 		// Deleting needs both: one of the listed roles (any-of) and every listed
 		// permission (all-of). Reading the same URL needs neither — which is the
@@ -75,7 +75,7 @@ func itemEndpoints() vov.Endpoints {
 			PermissionsAllOf: []string{"tasks.write"},
 			// The tool inherits the role and permission above: an assistant
 			// acting for a member is refused exactly as a browser would be.
-			Tool: &vov.Tool{Name: "delete_task", Description: deleteTaskDoc},
+			MCPTool: &vov.MCPTool{Name: "delete_task", Description: deleteTaskDoc},
 		},
 	}
 }

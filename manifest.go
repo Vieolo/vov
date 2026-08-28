@@ -13,13 +13,13 @@ const manifestHeader = `# vov route manifest — every endpoint this app declare
 # Regenerate whenever a route declaration changes; review the diff.
 #
 #   METHOD  PATH  auth:<mode>  stack:<name>  [roles-any:a|b]  [perms-all:x,y]
-#                 [min-tier:N]  [query:Type]  [body:Type]  [tool:name]
+#                 [min-tier:N]  [query:Type]  [body:Type]  [mcp-tool:name]
 #
 # roles-any  is satisfied by ANY one of the listed roles       (| reads as "or")
 # perms-all  requires EVERY one of the listed permissions      (, reads as "and")
 # min-tier   requires User.Tier() >= N; refused with 402, not 403
 # query/body the Go type the input shape was declared from
-# tool       the endpoint is callable by an AI assistant under this name
+# mcp-tool   the endpoint is callable by an AI assistant under this name
 
 `
 
@@ -109,8 +109,8 @@ func manifestLine(path string, me methodEndpoint) string {
 	}
 	// Which endpoints an assistant can reach is worth a reviewer's attention in
 	// its own right: it is a second audience for the same policy.
-	if t := me.Endpoint.Tool; t != nil {
-		fields = append(fields, "tool:"+t.Name)
+	if t := me.Endpoint.MCPTool; t != nil {
+		fields = append(fields, "mcp-tool:"+t.Name)
 	}
 
 	return fmt.Sprintf("%-*s %-*s %s",

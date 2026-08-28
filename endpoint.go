@@ -61,11 +61,12 @@ type Endpoint struct {
 	Body  *Schema
 	Query *Schema
 
-	// Tool, when set, declares this endpoint callable by an AI assistant under
-	// the given name — see [Tool]. It adds only the name and the prose a model
-	// reads; the method, path, arguments and policy are the ones already
-	// declared here, so a tool is never a second description of the endpoint.
-	Tool *Tool
+	// MCPTool, when set, declares this endpoint callable by an AI assistant over
+	// the Model Context Protocol, under the given name — see [MCPTool]. It adds
+	// only that name and the prose a model reads; the method, path, arguments
+	// and policy are the ones already declared here, so a tool is never a second
+	// description of the endpoint.
+	MCPTool *MCPTool
 
 	// MinTier restricts the endpoint to users whose [User.Tier] is at least this
 	// high. Zero — the default — places no restriction, so only endpoints behind
@@ -95,7 +96,7 @@ func (e Endpoint) declared() bool {
 		e.MinTier != 0 ||
 		e.Body != nil ||
 		e.Query != nil ||
-		e.Tool != nil
+		e.MCPTool != nil
 }
 
 // constrained reports whether the endpoint demands anything of the user beyond

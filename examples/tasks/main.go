@@ -312,7 +312,7 @@ func reportEndpoints() vov.Endpoints {
 		GET: vov.Endpoint{
 			RolesAnyOf: []string{"member"},
 			MinTier:    2,
-			Tool: &vov.Tool{
+			MCPTool: &vov.MCPTool{
 				Name: "get_reports",
 				Description: "Aggregate figures across the whole list. Requires a " +
 					"paid plan; on a free account this returns a message saying so.",

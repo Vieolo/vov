@@ -1,6 +1,7 @@
 package vov
 
-// Tool declares that an endpoint is callable by an AI assistant.
+// MCPTool declares that an endpoint is callable by an AI assistant over the
+// Model Context Protocol.
 //
 // It carries only what cannot be derived from the endpoint it sits on. The
 // method, the path, the arguments, who may call it and what happens when they
@@ -17,14 +18,14 @@ package vov
 //	GET: vov.Endpoint{
 //	    Handler:     listTasks,
 //	    Query:       vov.QueryOf[listTasksQuery](),
-//	    Tool:        &vov.Tool{Name: "list_tasks", Description: listTasksDoc},
+//	    MCPTool:     &vov.MCPTool{Name: "list_tasks", Description: listTasksDoc},
 //	}
 //
-// Declaring a Tool does not by itself serve anything. A protocol package — see
+// Declaring an MCPTool does not by itself serve anything. A protocol package — see
 // the vov/mcp module — reads these declarations and exposes them; vov itself only
 // records that the endpoint is meant to be reachable that way, which is a fact
 // worth having in the manifest whether or not a server is mounted.
-type Tool struct {
+type MCPTool struct {
 	// Name is what an assistant calls, e.g. "list_tasks". It must be unique
 	// across the app.
 	Name string
@@ -42,7 +43,7 @@ type Tool struct {
 
 // MCPConfig describes the Model Context Protocol server an app exposes, when it
 // exposes one. It is the app-level half of the declaration; the per-endpoint half
-// is [Tool].
+// is [MCPTool].
 //
 // Setting it does not start anything. It records what the server is called and
 // how a caller is identified, so that the vov/mcp module can build a handler from

@@ -12,7 +12,7 @@
 // resolves or downloads it, nor the protocol SDK underneath.
 //
 // Nothing is declared twice. An endpoint becomes a tool by carrying a
-// [vov.Tool], and the server itself is described by [vov.MCPConfig] on the app —
+// [vov.MCPTool], and the server itself is described by [vov.MCPConfig] on the app —
 // this package restates no path, no method and no policy, it reads them. Building
 // a handler therefore takes only the app:
 //
@@ -39,28 +39,30 @@ import (
 	"github.com/vieolo/vov"
 )
 
-// Option adjusts things that are not declarations.
-type Option func(*options)
+// HandlerOption adjusts the things about an MCP handler that are not
+// declarations. Everything a tool server serves is declared on the app and its
+// endpoints; these are the leftovers.
+type HandlerOption func(*handlerOptions)
 
-type options struct{ logger *slog.Logger }
+type handlerOptions struct{ logger *slog.Logger }
 
 // WithLogger sends protocol-level logging from the SDK to log.
-func WithLogger(log *slog.Logger) Option {
-	return func(o *options) { o.logger = log }
+func WithLogger(log *slog.Logger) HandlerOption {
+	return func(o *handlerOptions) { o.logger = log }
 }
 
 // NewHandler builds the http.Handler serving this app's tool-declaring endpoints
 // over MCP.
 //
 // Everything it needs is already declared: [vov.AppConfig.MCP] names the server
-// and says how a caller is identified, and each endpoint carrying a [vov.Tool]
+// and says how a caller is identified, and each endpoint carrying a [vov.MCPTool]
 // becomes a tool. Options are for the few things that are not declarations — a
 // logger, for now.
 //
 // Mount the result wherever the application likes — including on [vov.App.Mux],
 // which is what an app whose tool endpoint carries its own OAuth gate will want,
 // since that gate is not vov's Authenticator.
-func NewHandler(app *vov.App, opts ...Option) (http.Handler, error) {
+func NewHandler(app *vov.App, opts ...HandlerOption) (http.Handler, error) {
 	if app == nil {
 		return nil, fmt.Errorf("mcp: app is nil")
 	}
@@ -68,7 +70,7 @@ func NewHandler(app *vov.App, opts ...Option) (http.Handler, error) {
 	if cfg == nil {
 		return nil, fmt.Errorf("mcp: this app declares no AppConfig.MCP")
 	}
-	var o options
+	var o handlerOptions
 	for _, apply := range opts {
 		apply(&o)
 	}
@@ -83,14 +85,14 @@ func NewHandler(app *vov.App, opts ...Option) (http.Handler, error) {
 	// left here is deriving each one's schema from what it declares.
 	for _, r := range app.Routes() {
 		for _, me := range declaredEndpoints(r) {
-			if me.endpoint.Tool == nil {
+			if me.endpoint.MCPTool == nil {
 				continue
 			}
-			bound, err := bind(r.Path, me.method, me.endpoint)
+			bound, err := bindTool(r.Path, me.method, me.endpoint)
 			if err != nil {
-				return nil, fmt.Errorf("mcp: tool %q (%s %s): %w", me.endpoint.Tool.Name, me.method, r.Path, err)
+				return nil, fmt.Errorf("mcp: tool %q (%s %s): %w", me.endpoint.MCPTool.Name, me.method, r.Path, err)
 			}
-			server.AddTool(bound.tool, bound.handler(app, cfg))
+			server.AddTool(bound.tool, bound.toolHandler(app, cfg))
 		}
 	}
 
@@ -124,9 +126,9 @@ type boundTool struct {
 	queryNames []string
 }
 
-// bind derives a tool's input schema from the endpoint it is declared on.
-func bind(path, method string, ep vov.Endpoint) (*boundTool, error) {
-	t := ep.Tool
+// bindTool derives a tool's input schema from the endpoint it is declared on.
+func bindTool(path, method string, ep vov.Endpoint) (*boundTool, error) {
+	t := ep.MCPTool
 	b := &boundTool{
 		method:     method,
 		path:       path,
@@ -189,8 +191,8 @@ func bind(path, method string, ep vov.Endpoint) (*boundTool, error) {
 	return b, nil
 }
 
-// handler returns the SDK tool handler that dispatches this tool's call.
-func (b *boundTool) handler(app *vov.App, cfg *vov.MCPConfig) sdk.ToolHandler {
+// toolHandler returns the SDK handler that dispatches this tool's call.
+func (b *boundTool) toolHandler(app *vov.App, cfg *vov.MCPConfig) sdk.ToolHandler {
 	return func(ctx context.Context, req *sdk.CallToolRequest) (*sdk.CallToolResult, error) {
 		// The application resolves the caller from the transport's headers. A
 		// failure here is a protocol-level error: the assistant cannot fix a
@@ -210,13 +212,13 @@ func (b *boundTool) handler(app *vov.App, cfg *vov.MCPConfig) sdk.ToolHandler {
 		args := map[string]json.RawMessage{}
 		if len(req.Params.Arguments) > 0 {
 			if err := json.Unmarshal(req.Params.Arguments, &args); err != nil {
-				return errorResult("arguments must be a JSON object"), nil
+				return toolErrorResult("arguments must be a JSON object"), nil
 			}
 		}
 
-		path, query, body, err := b.split(args)
+		path, query, body, err := b.splitArgs(args)
 		if err != nil {
-			return errorResult(err.Error()), nil
+			return toolErrorResult(err.Error()), nil
 		}
 
 		res, err := app.Invoke(ctx, vov.InvokeRequest{
@@ -229,20 +231,20 @@ func (b *boundTool) handler(app *vov.App, cfg *vov.MCPConfig) sdk.ToolHandler {
 		if err != nil {
 			return nil, fmt.Errorf("dispatching %s %s: %w", b.method, b.path, err)
 		}
-		return result(res), nil
+		return toolResult(res), nil
 	}
 }
 
-// split routes each argument to where it belongs: into the path, the query
-// string, or the request body.
-func (b *boundTool) split(args map[string]json.RawMessage) (path string, query url.Values, body []byte, err error) {
+// splitArgs routes each tool argument to where it belongs: into the path, the
+// query string, or the request body.
+func (b *boundTool) splitArgs(args map[string]json.RawMessage) (path string, query url.Values, body []byte, err error) {
 	path = b.path
 	for _, p := range b.pathParams {
 		raw, ok := args[p]
 		if !ok {
 			return "", nil, nil, fmt.Errorf("missing required argument %q", p)
 		}
-		v, err := scalar(raw)
+		v, err := scalarArg(raw)
 		if err != nil {
 			return "", nil, nil, fmt.Errorf("argument %q: %w", p, err)
 		}
@@ -257,7 +259,7 @@ func (b *boundTool) split(args map[string]json.RawMessage) (path string, query u
 			if !ok {
 				continue
 			}
-			v, err := scalar(raw)
+			v, err := scalarArg(raw)
 			if err != nil {
 				return "", nil, nil, fmt.Errorf("argument %q: %w", n, err)
 			}
@@ -277,8 +279,8 @@ func (b *boundTool) split(args map[string]json.RawMessage) (path string, query u
 	return path, query, body, nil
 }
 
-// scalar renders a JSON value as the string a path or query carries.
-func scalar(raw json.RawMessage) (string, error) {
+// scalarArg renders a JSON tool argument as the string a path or query carries.
+func scalarArg(raw json.RawMessage) (string, error) {
 	var v any
 	if err := json.Unmarshal(raw, &v); err != nil {
 		return "", fmt.Errorf("is not valid JSON")
@@ -295,27 +297,27 @@ func scalar(raw json.RawMessage) (string, error) {
 	}
 }
 
-// result turns an endpoint's response into a tool result.
+// toolResult turns an endpoint's response into a tool result.
 //
 // A refusal is reported as a tool error rather than a protocol error, so the
 // assistant is told what happened and can act on it — asking the user to
 // subscribe, or giving up on a record it may not read — instead of seeing an
 // opaque failure it will simply retry.
-func result(res vov.InvokeResult) *sdk.CallToolResult {
+func toolResult(res vov.InvokeResult) *sdk.CallToolResult {
 	if res.Status >= 200 && res.Status < 300 {
 		return &sdk.CallToolResult{
 			Content: []sdk.Content{&sdk.TextContent{Text: string(res.Body)}},
 		}
 	}
-	return errorResult(refusal(res))
+	return toolErrorResult(refusalMessage(res))
 }
 
-// refusal explains a non-2xx status in terms an assistant can act on.
+// refusalMessage explains a non-2xx status in terms an assistant can act on.
 //
 // The status is used rather than the body because vov writes its own refusals as
 // bare status text: relaying "Forbidden" tells a model nothing it can do
 // something about.
-func refusal(res vov.InvokeResult) string {
+func refusalMessage(res vov.InvokeResult) string {
 	switch res.Status {
 	case http.StatusUnauthorized:
 		return "Not signed in: this call was not authenticated."
@@ -337,7 +339,7 @@ func refusal(res vov.InvokeResult) string {
 	return fmt.Sprintf("The request was rejected (%d): %s", res.Status, body)
 }
 
-func errorResult(msg string) *sdk.CallToolResult {
+func toolErrorResult(msg string) *sdk.CallToolResult {
 	return &sdk.CallToolResult{
 		IsError: true,
 		Content: []sdk.Content{&sdk.TextContent{Text: msg}},
