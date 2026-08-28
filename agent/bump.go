@@ -120,13 +120,24 @@ func printReleaseSteps(v semver) {
 	fmt.Printf("  git push && git push origin %s\n", strings.Join(tags, " "))
 }
 
-// checkVersions asserts that every recorded version agrees with go.yaml's.
+// versions asserts that every recorded version agrees with go.yaml's.
 //
-// The bump command exists to make this check redundant, and it is run anyway: a
-// version can still be edited by hand, and this is a break that stays invisible
-// from inside the repository — the replace directives mean everything here builds
-// against local source no matter what the requirements say. The first person to
-// see it is a consumer outside the repository who cannot fix it.
+// The bump command exists to make this redundant, and it runs anyway: a version
+// can still be edited by hand, and this break stays invisible from inside the
+// repository — the replace directives mean everything here builds against local
+// source no matter what the requirements say. The first person to see it is a
+// consumer outside the repository, who cannot fix it.
+//
+// It is its own command, and the last thing `all` runs, because it is release
+// hygiene rather than a build check. Between a bug being noticed and the release
+// that carries the fix, this is legitimately red — and a red release check must
+// not stand in front of the checks that would catch a behavioural regression.
+func versions(root string) int {
+	var r report
+	checkVersions(root, &r)
+	return r.done("VERSIONS")
+}
+
 func checkVersions(root string, r *report) {
 	fmt.Printf("-> versions :: recorded versions agree with %s\n", goYAMLName)
 

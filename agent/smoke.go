@@ -123,13 +123,13 @@ func smoke(root string) int {
 		r.fail("a handler did not reach its globals")
 	}
 	// The audit trail tells the two channels apart.
-	if !r.okf(strings.Contains(log, "path=/summary") && strings.Contains(log, "mode=network"),
-		"network call audited as network") {
-		r.fail("a network request was not audited with mode=network")
+	if !r.okf(strings.Contains(log, "path=/summary") && strings.Contains(log, "mode=api"),
+		"API call audited as api") {
+		r.fail("an API request was not audited with mode=api")
 	}
-	if !r.okf(strings.Contains(log, "path=/reports") && strings.Contains(log, "mode=invoke"),
-		"invoked call audited as invoke") {
-		r.fail("an invoked request was not audited with mode=invoke")
+	if !r.okf(strings.Contains(log, "path=/reports") && strings.Contains(log, "mode=mcp"),
+		"tool call audited as mcp") {
+		r.fail("an MCP request was not audited with mode=mcp")
 	}
 	code := srv.ProcessState.ExitCode()
 	hookRan := strings.Contains(log, "tasks_in_memory")
@@ -208,7 +208,11 @@ func checkEndpoints(r *report) {
 	res = do("GET", "/summary", auth(tokPro))
 	r.check("GET  /summary (paid caller)", res.Status, 200)
 	r.check("     inner /reports allowed", res.field("reports_status"), float64(200))
-	r.check("     outer call audited as network", res.Header.Get("X-Audit-Mode"), "network")
+	r.check("     outer call audited as api", res.Header.Get("X-Audit-Mode"), "api")
+	// The channel a dispatch answers for is the caller's to name, and the same
+	// call site names either one — the mechanism is identical, the mode is not.
+	r.check("     inner call answering for mcp", res.field("reports_mode"), "mcp")
+	r.check("     inner call answering for api", res.field("reports_mode_api"), "api")
 
 	// --- one URL, several methods -------------------------------------------
 	r.check("DEL  /tasks/1 (admin)", do("DELETE", "/tasks/1", auth(tokAdmin)).Status, 204)

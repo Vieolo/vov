@@ -47,12 +47,6 @@ func verify(root string) int {
 			fmt.Printf("   %s: %s :: %s\n", verdict, m.label, st.name)
 		}
 	}
-
-	// Last, because it is the only check here that cannot fail the build: every
-	// module compiles against local source whatever its go.mod records. See
-	// checkVersions.
-	checkVersions(root, &r)
-
 	return r.done("VERIFY")
 }
 
