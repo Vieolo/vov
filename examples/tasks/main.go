@@ -20,6 +20,7 @@ import (
 	"net/http"
 	"os"
 	"slices"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -146,6 +147,11 @@ func main() {
 			// The same function vov itself authenticates with. An app whose tool
 			// endpoint honoured OAuth access tokens would pass a different one.
 			Authenticate: makeAuthenticator(cfg.Token),
+			// Every tool call, including the ones no endpoint ever saw. The
+			// argument names are recorded and the values are not: vov hands over
+			// what the assistant sent, and deciding what is safe to keep is the
+			// application's job, not the framework's.
+			OnToolCall: auditToolCall,
 			// Serve it here. vov builds the handler and mounts it; there is
 			// nothing to do after NewApp.
 			Path: "/mcp",
@@ -424,12 +430,46 @@ func recoverPanic(log *slog.Logger) vov.Middleware {
 
 // --- endpoint middleware ----------------------------------------------------
 
+// auditToolCall records every tool call, dispatched or not.
+//
+// The rejected ones are why this exists: they reach no endpoint, so no middleware
+// runs for them, and an assistant looping on an argument it keeps getting wrong
+// is visible here and nowhere else.
+//
+// Only the argument *names* are recorded. Their values are a founder's note body
+// or an investor's name as often as not, and a sink that writes them verbatim is
+// one careless log line from putting private text where it does not belong.
+func auditToolCall(c vov.ToolCall) {
+	names := make([]string, 0, len(c.Arguments))
+	for k := range c.Arguments {
+		names = append(names, k)
+	}
+	sort.Strings(names)
+	who := "unresolved"
+	if u, ok := c.User.(*user); ok {
+		who = u.name
+	}
+	deps.Get().Log.Info("tool_call",
+		"tool", c.Tool, "outcome", string(c.Outcome), "status", c.Status,
+		"by", who, "args", strings.Join(names, ","), "err", c.Err)
+}
+
 // requestID stamps every response with an id. Part of the default stack, so its
 // presence in a response is evidence that stack ran.
 func requestID(next http.Handler) http.Handler {
 	var n atomicCounter
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("X-Request-Id", strconv.FormatUint(n.next(), 10))
+		// An inbound trace id wins, so a caller can correlate its own request
+		// with this server's log. This is also the whole of what an MCP call
+		// needs to be enriched: a tool call arrives carrying the transport's
+		// headers, so the middleware an app already writes reaches them, and
+		// there is no second MCP-only hook to learn.
+		id := r.Header.Get("X-Request-Id")
+		if id == "" {
+			id = strconv.FormatUint(n.next(), 10)
+		}
+		w.Header().Set("X-Request-Id", id)
+		deps.Get().Log.Info("request", "id", id, "path", r.URL.Path, "mode", string(vov.ModeFrom(r.Context())))
 		next.ServeHTTP(w, r)
 	})
 }

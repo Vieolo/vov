@@ -2,10 +2,14 @@ package vov
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
+	"net/url"
 	"slices"
 	"strings"
+	"time"
 
 	mcpsrv "github.com/vieolo/vov/internal/mcp"
 )
@@ -35,6 +39,24 @@ func (a *App) MCPHandler() (http.Handler, error) {
 // not the method, so it can be given one without the other being reachable by
 // anything an application imports.
 func (a *App) buildMCPHandler(cfg *MCPConfig) (http.Handler, error) {
+	tools, err := a.mcpTools(cfg)
+	if err != nil {
+		return nil, err
+	}
+	return mcpsrv.NewHandler(mcpsrv.Config{
+		Name:         cfg.Name,
+		Version:      cfg.Version,
+		Title:        cfg.Title,
+		Instructions: cfg.Instructions,
+		Logger:       cfg.Logger,
+		Tools:        tools,
+	})
+}
+
+// mcpTools binds every tool-declaring endpoint. Separated from the handler so
+// that a test can exercise one tool's dispatch without a protocol round trip:
+// what is worth pinning is what vov decides, not what the SDK renders.
+func (a *App) mcpTools(cfg *MCPConfig) ([]mcpsrv.Tool, error) {
 	var tools []mcpsrv.Tool
 	for _, r := range a.routes {
 		for _, me := range r.Endpoints.declared() {
@@ -49,14 +71,7 @@ func (a *App) buildMCPHandler(cfg *MCPConfig) (http.Handler, error) {
 			tools = append(tools, t)
 		}
 	}
-	return mcpsrv.NewHandler(mcpsrv.Config{
-		Name:         cfg.Name,
-		Version:      cfg.Version,
-		Title:        cfg.Title,
-		Instructions: cfg.Instructions,
-		Logger:       cfg.Logger,
-		Tools:        tools,
-	})
+	return tools, nil
 }
 
 // bindTool derives one tool from the endpoint it is declared on.
@@ -122,20 +137,64 @@ func (a *App) bindTool(path, method string, ep Endpoint, cfg *MCPConfig) (mcpsrv
 		Description: decl.Description,
 		ReadOnly:    readOnly,
 		InputSchema: schema,
-		Path:        path,
-		PathParams:  params,
-		QueryNames:  queryNames,
-		Call:        a.toolDispatch(method, cfg),
+		Call:        a.toolDispatch(boundTool{decl.Name, method, path, params, queryNames}, cfg),
 	}, nil
+}
+
+// errStack is what a panicking tool handler reports to the client. It says
+// nothing: a panic's value is written for an operator, reaches the
+// [MCPConfig.OnToolCall] record instead, and relaying it would hand an assistant
+// internal detail it has no use for and should not have.
+var errStack = errors.New("the server failed to handle this tool call")
+
+// boundTool is a tool resolved against the declaration it calls.
+type boundTool struct {
+	name       string
+	method     string
+	path       string
+	pathParams []string
+	queryNames []string
 }
 
 // toolDispatch builds the closure a tool is called through.
 //
-// Authentication and dispatch both happen here rather than in the protocol
-// package, which is what keeps [User] — and [App.invoke] — out of a package that
-// has no business holding either.
-func (a *App) toolDispatch(method string, cfg *MCPConfig) func(context.Context, mcpsrv.Request) (mcpsrv.Result, error) {
-	return func(ctx context.Context, in mcpsrv.Request) (mcpsrv.Result, error) {
+// Everything a caller can influence happens here, in one place and one order:
+// resolve the caller, read the arguments, dispatch. That the order is visible is
+// the point — authentication comes first so that a call rejected for a bad
+// argument is still attributable to whoever made it, which is exactly the call an
+// operator wants to see when an assistant is looping on one.
+//
+// The single deferred observation is deliberate too. Scattering it across the
+// exits would leave "it must fire for the failures as well" one early return away
+// from being untrue again, which is how it comes to be missing in the first place.
+func (a *App) toolDispatch(t boundTool, cfg *MCPConfig) func(context.Context, mcpsrv.Call) (mcpsrv.Result, error) {
+	return func(ctx context.Context, in mcpsrv.Call) (out mcpsrv.Result, err error) {
+		started := time.Now()
+		call := ToolCall{Tool: t.name, Outcome: ToolOutcomeFailed}
+		defer func() {
+			// Recovery has to happen here, and it is not belt-and-braces on top
+			// of [AppConfig.ServerWrappers]: those cannot reach this. The
+			// protocol SDK dispatches each tool call on a goroutine of its own,
+			// so a wrapper's deferred recover — which sits on the goroutine
+			// serving the HTTP request the call arrived on — never sees the
+			// panic, and neither does net/http's. Without this, one panicking
+			// handler ends the process.
+			panicked := recover()
+			if panicked != nil {
+				out, err = mcpsrv.Result{}, errStack
+			}
+			call.Err, call.Status, call.Duration = err, out.Status, time.Since(started)
+			if panicked != nil {
+				// The client is told nothing beyond "it failed"; the detail is
+				// written for whoever is on call.
+				call.Err = fmt.Errorf("panic in tool %q: %v", t.name, panicked)
+			}
+			if err == nil && out.Reject == "" {
+				call.Outcome = outcomeOf(out.Status)
+			}
+			observeToolCall(cfg, call)
+		}()
+
 		// The application resolves the caller from the transport's headers. A
 		// failure here is a dispatch failure, not a refusal: the assistant cannot
 		// fix a broken token store by rephrasing.
@@ -145,12 +204,34 @@ func (a *App) toolDispatch(method string, cfg *MCPConfig) func(context.Context, 
 		if err != nil {
 			return mcpsrv.Result{}, fmt.Errorf("resolving the caller: %w", err)
 		}
+		call.User, call.Scopes = user, resp.scopes()
+
+		// A rejection is an answer, not a failure: the assistant is told what was
+		// wrong so it can call again correctly. The named error result stays nil,
+		// and the outcome carries the fact instead.
+		args, argErr := decodeToolArgs(in.RawArgs)
+		if argErr != nil {
+			call.Outcome = ToolOutcomeRejected
+			return mcpsrv.Result{Reject: "arguments must be a JSON object"}, nil
+		}
+		call.Arguments = args
+
+		path, query, body, mapErr := t.splitArgs(args)
+		if mapErr != nil {
+			call.Outcome = ToolOutcomeRejected
+			return mcpsrv.Result{Reject: mapErr.Error()}, nil
+		}
 
 		res, err := a.invoke(ctx, invokeRequest{
-			Method: method,
-			Path:   in.Path,
-			Query:  in.Query,
-			Body:   in.Body,
+			Method: t.method,
+			Path:   path,
+			Query:  query,
+			Body:   body,
+			// The transport headers of the call, so an application's own
+			// middleware sees the request it actually arrived as. It is the seam
+			// an app enriches a tool call through — the same Pre middleware it
+			// already writes, rather than a second, MCP-only hook.
+			Header: in.Header,
 			User:   user,
 			// The guard skips the authenticator for a vouched call, so what it
 			// reported about the credential has to travel with the identity it
@@ -165,6 +246,84 @@ func (a *App) toolDispatch(method string, cfg *MCPConfig) func(context.Context, 
 			return mcpsrv.Result{}, err
 		}
 		return mcpsrv.Result{Status: res.Status, Body: res.Body}, nil
+	}
+}
+
+// decodeToolArgs reads the arguments object a client sent.
+func decodeToolArgs(raw json.RawMessage) (map[string]json.RawMessage, error) {
+	args := map[string]json.RawMessage{}
+	if len(raw) == 0 {
+		return args, nil
+	}
+	if err := json.Unmarshal(raw, &args); err != nil {
+		return nil, err
+	}
+	return args, nil
+}
+
+// splitArgs routes each tool argument to where it belongs: into the path, the
+// query string, or the request body.
+//
+// It lives here rather than in the protocol package because what it maps onto is
+// vov's route model — a path pattern's wildcards and an endpoint's declared query
+// fields — and not anything MCP defines.
+func (t boundTool) splitArgs(args map[string]json.RawMessage) (path string, query url.Values, body []byte, err error) {
+	path = t.path
+	for _, p := range t.pathParams {
+		raw, ok := args[p]
+		if !ok {
+			return "", nil, nil, fmt.Errorf("missing required argument %q", p)
+		}
+		v, err := scalarArg(raw)
+		if err != nil {
+			return "", nil, nil, fmt.Errorf("argument %q: %w", p, err)
+		}
+		path = strings.Replace(path, "{"+p+"}", url.PathEscape(v), 1)
+		delete(args, p)
+	}
+
+	if len(t.queryNames) > 0 {
+		query = url.Values{}
+		for _, n := range t.queryNames {
+			raw, ok := args[n]
+			if !ok {
+				continue
+			}
+			v, err := scalarArg(raw)
+			if err != nil {
+				return "", nil, nil, fmt.Errorf("argument %q: %w", n, err)
+			}
+			if v != "" {
+				query.Set(n, v)
+			}
+			delete(args, n)
+		}
+	}
+
+	// Whatever is left is the body. An endpoint declaring no body gets none.
+	if len(args) > 0 {
+		if body, err = json.Marshal(args); err != nil {
+			return "", nil, nil, fmt.Errorf("encoding the request body: %w", err)
+		}
+	}
+	return path, query, body, nil
+}
+
+// scalarArg renders a JSON tool argument as the string a path or query carries.
+func scalarArg(raw json.RawMessage) (string, error) {
+	var v any
+	if err := json.Unmarshal(raw, &v); err != nil {
+		return "", fmt.Errorf("is not valid JSON")
+	}
+	switch t := v.(type) {
+	case nil:
+		return "", nil
+	case string:
+		return t, nil
+	case bool, float64:
+		return strings.Trim(string(raw), `"`), nil
+	default:
+		return "", fmt.Errorf("must be a string, number or boolean")
 	}
 }
 

@@ -87,6 +87,36 @@ type MCPConfig struct {
 	// construction whichever route is taken.
 	Path string
 
+	// OnToolCall, if set, is handed a record of every tool call — see [ToolCall].
+	//
+	// It exists because middleware structurally cannot do this job. An endpoint's
+	// middleware sees an invocation but never the tool name, and, more to the
+	// point, never sees the calls that fail before dispatch: a call rejected for
+	// a bad argument reaches no endpoint, so no stack runs for it, and an
+	// assistant looping on an argument it keeps getting wrong is visible here and
+	// nowhere else.
+	//
+	// It observes and cannot decide. It returns nothing, and a panic inside it is
+	// recovered, because by the time it runs the endpoint has committed whatever
+	// it was going to commit — an error it could only hand back would be a
+	// complaint about something already done. It runs on the calling goroutine,
+	// so a sink that blocks delays the call; push to a channel if that matters.
+	//
+	// # It is handed raw arguments
+	//
+	// [ToolCall.Arguments] is what the assistant sent, undecoded and
+	// unsummarised. vov cannot summarise it honestly — it does not know which of
+	// an application's fields hold a person's name or the body of a private note
+	// — so it passes them through rather than inventing a redaction that is wrong
+	// in a way nobody notices.
+	//
+	// That makes the sink responsible. A tool call's arguments are user content:
+	// storing them verbatim, or logging them, is one careless line away from
+	// putting private text somewhere it was never meant to go. Record the field
+	// names, or a length, or a hash — record the values only if that is a
+	// decision someone made on purpose.
+	OnToolCall func(ToolCall)
+
 	// Logger, if set, receives protocol-level logging from the tool server.
 	Logger *slog.Logger
 }
