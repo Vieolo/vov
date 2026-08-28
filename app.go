@@ -169,6 +169,12 @@ func NewApp(cfg AppConfig) (*App, error) {
 			if err := validateAuth(me.Endpoint); err != nil {
 				return nil, fmt.Errorf("vov: route %d (%s): %w", i, p, err)
 			}
+			if err := me.Endpoint.Body.Err(); err != nil {
+				return nil, fmt.Errorf("vov: route %d (%s): Body: %w", i, p, err)
+			}
+			if err := me.Endpoint.Query.Err(); err != nil {
+				return nil, fmt.Errorf("vov: route %d (%s): Query: %w", i, p, err)
+			}
 
 			stack, err := resolveStack(cfg.MiddlewareStacks, me.Endpoint.MiddlewareStack)
 			if err != nil {

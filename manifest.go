@@ -12,11 +12,13 @@ import (
 const manifestHeader = `# vov route manifest — every endpoint this app declares, and who may reach it.
 # Regenerate whenever a route declaration changes; review the diff.
 #
-#   METHOD  PATH  auth:<mode>  stack:<name>  [roles-any:a|b]  [perms-all:x,y]  [min-tier:N]
+#   METHOD  PATH  auth:<mode>  stack:<name>  [roles-any:a|b]  [perms-all:x,y]
+#                 [min-tier:N]  [query:Type]  [body:Type]
 #
 # roles-any  is satisfied by ANY one of the listed roles       (| reads as "or")
 # perms-all  requires EVERY one of the listed permissions      (, reads as "and")
 # min-tier   requires User.Tier() >= N; refused with 402, not 403
+# query/body the Go type the input shape was declared from
 
 `
 
@@ -93,6 +95,16 @@ func manifestLine(path string, me methodEndpoint) string {
 	}
 	if tier := me.Endpoint.MinTier; tier > 0 {
 		fields = append(fields, fmt.Sprintf("min-tier:%d", tier))
+	}
+	// The declared input shapes, by the Go type they came from. The name is what
+	// a reviewer can act on: a route that gains or loses a body is a contract
+	// change worth a line, while spelling out every field would bury the policy
+	// this file exists to show.
+	if q := me.Endpoint.Query; q != nil {
+		fields = append(fields, "query:"+q.TypeName)
+	}
+	if b := me.Endpoint.Body; b != nil {
+		fields = append(fields, "body:"+b.TypeName)
 	}
 
 	return fmt.Sprintf("%-*s %-*s %s",

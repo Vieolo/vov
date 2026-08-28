@@ -45,6 +45,22 @@ type Endpoint struct {
 	// requirement that silently does nothing.
 	PermissionsAllOf []string
 
+	// Body describes the shape of the request body, built with [BodyOf] from the
+	// type the handler decodes into. Query does the same for the query string,
+	// with [QueryOf].
+	//
+	// They describe; vov does not decode or enforce them. What they are for is
+	// the consumers that cannot work without a machine-readable contract: an
+	// OpenAPI document, an MCP tool's input schema, and a test runner that has to
+	// build a valid body to attempt a request it should not be allowed to make.
+	// Declaring the shape once, on the endpoint, is what keeps those three from
+	// becoming three copies that drift.
+	//
+	// A type vov cannot describe is a construction error, so a declaration never
+	// silently renders as something it is not.
+	Body  *Schema
+	Query *Schema
+
 	// MinTier restricts the endpoint to users whose [User.Tier] is at least this
 	// high. Zero — the default — places no restriction, so only endpoints behind
 	// a paywall mention it.
@@ -70,7 +86,9 @@ func (e Endpoint) declared() bool {
 		e.AuthMode != "" ||
 		len(e.RolesAnyOf) > 0 ||
 		len(e.PermissionsAllOf) > 0 ||
-		e.MinTier != 0
+		e.MinTier != 0 ||
+		e.Body != nil ||
+		e.Query != nil
 }
 
 // constrained reports whether the endpoint demands anything of the user beyond
