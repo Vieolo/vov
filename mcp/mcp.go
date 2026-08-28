@@ -214,6 +214,10 @@ func (b *boundTool) toolHandler(app *vov.App, cfg *vov.MCPConfig) sdk.ToolHandle
 			Query:  query,
 			Body:   body,
 			User:   user,
+			// This package is the MCP channel, so it is the thing that knows to
+			// say so. Invoke requires it: dispatching in process is how a tool
+			// call reaches its endpoint, not what it is.
+			Mode: vov.RequestModeMCP,
 		})
 		if err != nil {
 			return nil, fmt.Errorf("dispatching %s %s: %w", b.method, b.path, err)
