@@ -77,6 +77,10 @@ type InvokeResult struct {
 // that triggered it. Dispatch goes through [App.Mux], which is the same
 // distinction [App.Handler] draws.
 //
+// The dispatched request carries [RequestModeInvoke], so middleware can meter
+// and audit the two channels apart. Handlers should read that, not branch on it
+// — see [RequestMode].
+//
 // The returned error reports a request that could not be built — a malformed
 // path, an invalid method. Anything the router or the endpoint decided, 404 and
 // 405 included, comes back as an [InvokeResult] with that status, because those
@@ -122,9 +126,11 @@ func (a *App) Invoke(ctx context.Context, req InvokeRequest) (InvokeResult, erro
 		hr.Header.Set("Content-Type", "application/json")
 	}
 
-	// Vouch for the user. The key is unexported, so nothing outside this package
-	// can forge it — which is what keeps the guard's trust in it safe.
-	hr = hr.WithContext(context.WithValue(hr.Context(), invokeUserKey{}, invokeUser{user: req.User}))
+	// Vouch for the user, and tag the channel. Both keys are unexported, so
+	// nothing outside this package can forge either — which is what keeps the
+	// guard's trust in the first one safe, and the second one worth metering on.
+	ictx := context.WithValue(hr.Context(), invokeUserKey{}, invokeUser{user: req.User})
+	hr = hr.WithContext(withMode(ictx, RequestModeInvoke))
 
 	rec := &captureWriter{header: make(http.Header)}
 	a.mux.ServeHTTP(rec, hr)

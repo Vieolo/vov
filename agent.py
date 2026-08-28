@@ -272,9 +272,12 @@ def smoke() -> int:
             check("GET  /summary (unpaid caller)", status, 200)
             check("     inner /reports refused 402", json.loads(body).get("reports_status"), 402)
 
-            status, _, body = _http("/summary", headers=PRO_HDR)
+            status, hdrs, body = _http("/summary", headers=PRO_HDR)
             check("GET  /summary (paid caller)", status, 200)
             check("     inner /reports allowed", json.loads(body).get("reports_status"), 200)
+            # The outer request arrived over the network; the inner one did not.
+            # Both are audited, and the mode is what tells them apart afterwards.
+            check("     outer call audited as network", hdrs.get("X-Audit-Mode"), "network")
 
             # --- one URL, several methods ------------------------------------
             # /tasks/{id} declares GET and DELETE in a single Route.
@@ -377,6 +380,16 @@ def smoke() -> int:
             # The dependency struct reached a handler: createTask used both the
             # logger and the S3 client it was handed.
             deps_reached = "archived" in log and "s3://" in log
+            # The audit trail distinguishes the channels: /summary arrived over
+            # the network, and the /reports call it dispatched did not.
+            audited_network = 'path=/summary' in log and 'mode=network' in log
+            audited_invoke = 'path=/reports' in log and 'mode=invoke' in log
+            print(f"   {'ok ' if audited_network else 'BAD'} network call audited as network: {audited_network}")
+            print(f"   {'ok ' if audited_invoke else 'BAD'} invoked call audited as invoke: {audited_invoke}")
+            if not audited_network:
+                failures.append("network request was not audited with mode=network")
+            if not audited_invoke:
+                failures.append("invoked request was not audited with mode=invoke")
             print(f"   {'ok ' if deps_reached else 'BAD'} handler used injected deps: {deps_reached}")
             if not deps_reached:
                 failures.append("handler did not reach its injected dependencies")

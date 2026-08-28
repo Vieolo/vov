@@ -420,14 +420,21 @@ func logging(next http.Handler) http.Handler {
 	})
 }
 
-// auditLog records who performed the request. It is the reason the after-auth
-// phase exists: it needs the user, so it cannot run in the outer stack, which
-// executes before anyone has been authenticated.
+// auditLog records who performed the request, and over which channel. It is the
+// reason the after-auth phase exists: it needs the user, so it cannot run in the
+// outer stack, which executes before anyone has been authenticated.
+//
+// Recording the mode is the legitimate use of it — this row is how a tool call
+// and a browser call get told apart afterwards. Nothing here branches on it, and
+// nothing downstream should: see vov.RequestMode.
 func auditLog(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		u := currentUser(r)
+		mode := vov.ModeFrom(r.Context())
 		w.Header().Set("X-Audit-User", u.name)
-		log.Printf("audit: %s %s by %s", r.Method, r.URL.Path, u.name)
+		w.Header().Set("X-Audit-Mode", string(mode))
+		deps.Get().Log.Info("audit", "method", r.Method, "path", r.URL.Path,
+			"by", u.name, "mode", string(mode))
 		next.ServeHTTP(w, r)
 	})
 }
