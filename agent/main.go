@@ -28,7 +28,6 @@ import (
 // boundary and a break in one would otherwise stay invisible to the others.
 var modules = []struct{ label, dir string }{
 	{"vov", "."},
-	{"mcp", "mcp"},
 	{"agent", "agent"},
 	{"examples/tasks", "examples/tasks"},
 }

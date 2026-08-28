@@ -37,6 +37,7 @@ const (
 	tokPro       = "t-ramtin-pro"       // member, paid tier 2
 	tokHalfAdmin = "t-ramtin-halfadmin" // role admin, no permission
 	tokReader    = "t-ramtin-reader"    // member only
+	tokReadOnly  = "t-ramtin-readonly"  // full permissions, read-only credential
 	tokRevoked   = "t-ramtin-revoked"   // a dead credential
 	tokBoom      = "t-boom"             // makes the authenticator fail
 )
@@ -340,6 +341,18 @@ func checkMCP(r *report) {
 	r.check("MCP  get_reports (unpaid)", isErr && strings.Contains(text, "paid subscription"), true)
 	isErr, _ = callTool("get_reports", map[string]any{}, tokPro)
 	r.check("MCP  get_reports (paid)", isErr, false)
+
+	// The scope axis, over the real protocol. Same person and same permissions
+	// as tokMember above — a narrower key. Reading is within the grant; writing
+	// is not, and no permission the user holds can make up for it.
+	isErr, _ = callTool("list_tasks", map[string]any{}, tokReadOnly)
+	r.check("MCP  list_tasks (read-only grant)", isErr, false)
+	isErr, _ = callTool("create_task", map[string]any{"title": "nope"}, tokReadOnly)
+	r.check("MCP  create_task (read-only grant)", isErr, true)
+	// ...and the same narrow credential is unaffected over the HTTP API, which
+	// is the whole point of naming a channel in the rule.
+	r.check("POST /tasks (read-only grant, API)",
+		do("POST", "/tasks", auth(tokReadOnly), jsonBody(`{"title":"via api"}`)).Status, 201)
 
 	// A missing required argument never reaches the endpoint.
 	isErr, text = callTool("get_task", map[string]any{}, tokMember)

@@ -12,26 +12,27 @@ import (
 	"time"
 )
 
-// The repository releases its modules in lockstep: root vov and vov/mcp always
-// carry the same version, and every intra-repo requirement records it.
+// Every place the repository records its own version is raised together, and
+// checked together.
 //
 // That is not tidiness. A `replace` directive applies only in the main module, so
-// a consumer of vov/mcp never sees the one pointing at ../ — it gets whatever
-// version vov/mcp's go.mod *requires*. When that requirement is stale, `go get
-// github.com/vieolo/vov/mcp` selects a vov too old to compile against, and the
-// break is invisible from inside this repository, where the replace hides it. The
-// whole point of the commands below is to make that state unreachable.
+// a consumer never sees the ones pointing at local source — it gets whatever
+// version a go.mod *requires*. When that requirement is stale, `go get` selects a
+// vov too old to compile against, and the break is invisible from inside this
+// repository, where the replace hides it. The commands below exist to make that
+// state unreachable.
 //
-// vov/mcp is tagged on every release even when none of its code changed. A
-// version it does not need costs nothing; a version it needs and does not have
-// costs a consumer a build failure they cannot diagnose.
+// vov once published vov/mcp as a second module, which is what made this bite:
+// its recorded requirement on root vov went stale and nothing here noticed. That
+// module is now part of root vov, so the surface is smaller — but the check
+// stays, because the example module records a version too and the failure mode
+// is identical.
 
-// releaseModules are the modules published under their own tag. A submodule's
-// tag is its directory followed by the version, which is how the go tool finds
-// it — hence mcp/v0.2.2 rather than v0.2.2.
+// releaseModules are the modules published under their own tag. A submodule
+// would be tagged with its directory before the version — mcp/v0.2.2 rather than
+// v0.2.2 — which is worth remembering if one is ever split out again.
 var releaseModules = []struct{ label, tagPrefix string }{
 	{"vov", ""},
-	{"mcp", "mcp/"},
 }
 
 // versionedRequires lists, per module, the intra-repo requirements whose
@@ -41,8 +42,7 @@ var versionedRequires = []struct {
 	dir   string
 	paths []string
 }{
-	{"mcp", []string{"github.com/vieolo/vov"}},
-	{"examples/tasks", []string{"github.com/vieolo/vov", "github.com/vieolo/vov/mcp"}},
+	{"examples/tasks", []string{"github.com/vieolo/vov"}},
 }
 
 const (
@@ -107,7 +107,7 @@ func bump(root string, minor bool) int {
 
 // printReleaseSteps prints the part of a release the agent deliberately does not
 // perform. Tags are listed explicitly rather than pushed with --tags, so that a
-// release pushes the two it just created and nothing it did not.
+// release pushes the ones it just created and nothing it did not.
 func printReleaseSteps(v semver) {
 	fmt.Printf("\nFiles are updated. The rest is yours to review and run:\n\n")
 	fmt.Printf("  go -C agent run . all\n")
