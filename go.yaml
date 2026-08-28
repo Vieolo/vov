@@ -12,6 +12,7 @@ external:
       verify: go -C agent run . verify
       manifest: go -C agent run . manifest
       smoke: go -C agent run . smoke
+      versions: go -C agent run . versions
       check: go -C agent run . all
       # Release: raise the version everywhere it is recorded, then print the
       # commit and tag steps to review and run by hand.
