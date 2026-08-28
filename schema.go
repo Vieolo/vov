@@ -6,6 +6,7 @@ import (
 	"reflect"
 	"strings"
 	"time"
+	"unicode"
 )
 
 // Kind is the JSON type of a declared value.
@@ -39,6 +40,24 @@ type Field struct {
 	// contract off an encoding hint would make the declaration mean something
 	// its author did not write.
 	Required bool
+
+	// Description is the prose a consumer shows for this field, from a
+	// `jsonschema:"…"` tag whose whole value is the description:
+	//
+	//	Country string `json:"country" jsonschema:"ISO-3166 alpha-2 code, matched against the investor's home country"`
+	//
+	// It is a separate tag from vov's own on purpose. `vov:"…"` is a list of
+	// comma-separated options, and a description is free text that routinely
+	// contains commas and colons — putting prose in a flag list would need
+	// escaping to say the very things worth saying. The tag is the one the
+	// ecosystem already uses for exactly this, so a type carrying descriptions
+	// reads the same to vov and to a generic JSON Schema inferrer.
+	//
+	// Shape describes what a value *is*; this describes what to put there, which
+	// is a different question and the one a caller usually gets wrong. For an
+	// assistant it is often the whole difference between a working call and a
+	// silently empty result.
+	Description string
 }
 
 // Schema describes the shape of a request body or query string.
@@ -224,10 +243,15 @@ func structFields(t reflect.Type, depth int) ([]Field, error) {
 		if fs.err != nil {
 			return nil, fmt.Errorf("field %s: %w", sf.Name, fs.err)
 		}
+		desc, err := fieldDescription(sf)
+		if err != nil {
+			return nil, fmt.Errorf("field %s: %w", sf.Name, err)
+		}
 		fields = append(fields, Field{
-			Name:     name,
-			Schema:   fs,
-			Required: hasTagOption(sf.Tag.Get("vov"), "required"),
+			Name:        name,
+			Schema:      fs,
+			Required:    hasTagOption(sf.Tag.Get("vov"), "required"),
+			Description: desc,
 		})
 	}
 	return fields, nil
@@ -249,6 +273,29 @@ func jsonName(sf reflect.StructField) (name string, ok bool) {
 		return "-", true
 	}
 	return name, true
+}
+
+// fieldDescription reads a field's `jsonschema:"…"` tag.
+//
+// The whole tag value is the description; there is no key=value syntax, which is
+// what lets prose contain commas and colons without escaping. Two shapes are
+// rejected rather than accepted quietly, both of them the ecosystem's own rules:
+// an empty tag, which says nothing while looking like it says something, and one
+// beginning with "WORD=", which is reserved for future syntax. Honouring that
+// reservation is what keeps a type's tags meaning the same thing to vov and to
+// any other reader of them.
+func fieldDescription(sf reflect.StructField) (string, error) {
+	tag, ok := sf.Tag.Lookup("jsonschema")
+	if !ok {
+		return "", nil
+	}
+	if tag == "" {
+		return "", fmt.Errorf(`has an empty jsonschema tag; remove it or describe the field`)
+	}
+	if word, _, found := strings.Cut(tag, "="); found && word != "" && !strings.ContainsFunc(word, unicode.IsSpace) {
+		return "", fmt.Errorf("jsonschema tag begins with %q=, which is reserved; a description is the whole tag value", word)
+	}
+	return tag, nil
 }
 
 func hasTagOption(tag, want string) bool {
@@ -303,7 +350,7 @@ func (s *Schema) JSONSchema() map[string]any {
 			props := make(map[string]any, len(s.Fields))
 			var required []string
 			for _, f := range s.Fields {
-				props[f.Name] = f.Schema.JSONSchema()
+				props[f.Name] = f.JSONSchema()
 				if f.Required {
 					required = append(required, f.Name)
 				}
@@ -317,6 +364,21 @@ func (s *Schema) JSONSchema() map[string]any {
 		if s.Elem != nil {
 			out["items"] = s.Elem.JSONSchema()
 		}
+	}
+	return out
+}
+
+// JSONSchema renders the field as a JSON Schema property: its value's schema,
+// plus the field's own description. The description belongs to the field rather
+// than to its type, which is why it is added here and not by [Schema.JSONSchema]
+// — two fields of the same type describe different things.
+func (f Field) JSONSchema() map[string]any {
+	out := f.Schema.JSONSchema()
+	if out == nil {
+		out = map[string]any{}
+	}
+	if f.Description != "" {
+		out["description"] = f.Description
 	}
 	return out
 }
