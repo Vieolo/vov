@@ -339,7 +339,7 @@ func authGuard(next http.Handler, auth Authenticator, e Endpoint, sc *scopeCheck
 			return
 		}
 		ctx := ContextWithUser(r.Context(), u)
-		if scopes != nil {
+		if len(scopes) > 0 {
 			ctx = contextWithScopes(ctx, scopes)
 		}
 		next.ServeHTTP(w, r.WithContext(ctx))

@@ -41,13 +41,12 @@ func ScopeNone() ScopeAllOf { return ScopeAllOf{RequestModeAPI: {}, RequestModeM
 //				http.MethodPost:   {"tasks:write"},
 //				http.MethodDelete:    {"tasks:read", "tasks:delete"},
 //			},
-//		},
 //	 	MCP: map[string][]string{
 //				http.MethodGet:    {"tasks:read"},
 //				http.MethodPost:   {"tasks:write"},
 //				http.MethodPut:    {"tasks:read", "tasks:write"},
 //			},
-//		},
+//		}
 //
 // Have in mind that `vov` has no understanding of the vocabulary of your scopes,
 // treats any given string equally, and only uses your declaration to make a distinction
