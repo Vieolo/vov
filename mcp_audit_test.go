@@ -214,3 +214,136 @@ func TestPanickingToolIsContained(t *testing.T) {
 		t.Errorf("the observed record lost the panic value: %v", seen[0].Err)
 	}
 }
+
+// TestObservedArgumentsSurviveRouting is a regression test for a real defect.
+//
+// splitArgs consumes the argument map as it routes, deleting each value it
+// places in the path or the query. The record used to alias that map, so by the
+// time the deferred observation ran it held only what vov had *failed* to
+// route — which for a read tool whose inputs are all path parameters is an empty
+// map. An audit trail exists to answer "what has this assistant been doing", and
+// `get_project {}` does not answer it.
+func TestObservedArgumentsSurviveRouting(t *testing.T) {
+	var seen []ToolCall
+	app := auditApp(t, okAuth, &seen, nil)
+
+	callTool(t, app, `{"id":"42"}`) // "id" is the tool's path parameter
+
+	if len(seen) != 1 {
+		t.Fatalf("got %d records, want 1", len(seen))
+	}
+	got, ok := seen[0].Arguments["id"]
+	if !ok {
+		t.Fatalf("the routed path parameter was consumed from the record: %v", seen[0].Arguments)
+	}
+	if string(got) != `"42"` {
+		t.Errorf("recorded id as %s, want \"42\"", got)
+	}
+	// The fixture's handler answers 418, so the outcome is a refusal — what
+	// matters here is that the call was dispatched at all, and so had its
+	// arguments routed and therefore consumed.
+	if seen[0].Status != http.StatusTeapot {
+		t.Errorf("status %d, want %d — the call did not reach the endpoint", seen[0].Status, http.StatusTeapot)
+	}
+}
+
+// TestObservedArgumentsSurviveAQueryRoute covers the other consumer of the map.
+// A query field is deleted by the same loop, and a tool whose inputs are all
+// query parameters is the other shape that recorded nothing.
+func TestObservedArgumentsSurviveAQueryRoute(t *testing.T) {
+	var seen []ToolCall
+	app, err := NewApp(AppConfig{
+		API: APIConfig{Authenticator: okAuth},
+		MCP: &MCPConfig{
+			Name: "probe", Version: "0", Authenticate: okAuth,
+			OnToolCall: func(_ context.Context, c ToolCall) { seen = append(seen, c) },
+		},
+		Routes: []Route{{
+			Path: "/things",
+			Endpoints: Endpoints{GET: Endpoint{
+				Query: QueryOf[struct {
+					Q string `json:"q"`
+				}](),
+				MCPTool: &MCPTool{Name: "find_things", Description: "d"},
+				Handler: func(http.ResponseWriter, *http.Request) {},
+			}},
+		}},
+	})
+	if err != nil {
+		t.Fatalf("NewApp: %v", err)
+	}
+	tools, err := app.mcpTools(app.mcp)
+	if err != nil {
+		t.Fatalf("building tools: %v", err)
+	}
+	if _, err := tools[0].Call(context.Background(), mcpCall("find_things", `{"q":"acme"}`)); err != nil {
+		t.Fatalf("Call: %v", err)
+	}
+
+	if len(seen) != 1 || string(seen[0].Arguments["q"]) != `"acme"` {
+		t.Fatalf("the routed query field was consumed from the record: %v", seen[0].Arguments)
+	}
+}
+
+// TestUnknownArgumentIsRefused: an argument matching nothing the tool declares
+// used to be marshalled into the request body regardless, so a model that
+// invented a parameter name had it forwarded and learned nothing. The schema
+// already names every argument, so anything else is a mistake worth stating.
+func TestUnknownArgumentIsRefused(t *testing.T) {
+	var seen []ToolCall
+	app := auditApp(t, okAuth, &seen, nil)
+
+	tools, err := app.mcpTools(app.mcp)
+	if err != nil {
+		t.Fatalf("building tools: %v", err)
+	}
+	res, err := tools[0].Call(context.Background(), mcpCall("get_thing", `{"id":"42","colour":"red"}`))
+	if err != nil {
+		t.Fatalf("Call: %v", err)
+	}
+	if !strings.Contains(res.Reject, `unknown argument(s) "colour"`) {
+		t.Errorf("rejection was %q, want it to name the unknown argument", res.Reject)
+	}
+	// It says what could have been sent instead, which is the actionable half.
+	if !strings.Contains(res.Reject, `accepts "id"`) {
+		t.Errorf("rejection was %q, want it to list the accepted arguments", res.Reject)
+	}
+	// And the attempt is still observed, in full.
+	if len(seen) != 1 || seen[0].Outcome != ToolOutcomeRejected {
+		t.Fatalf("got %d records, outcome %v", len(seen), seen)
+	}
+	if _, ok := seen[0].Arguments["colour"]; !ok {
+		t.Error("the record lost the argument that caused the rejection")
+	}
+}
+
+// TestFreeFormBodyStillAcceptsAnything: a body declared as a map has keys that
+// are not known ahead of time, so the check must not fire for it.
+func TestFreeFormBodyStillAcceptsAnything(t *testing.T) {
+	app, err := NewApp(AppConfig{
+		API: APIConfig{Authenticator: okAuth},
+		MCP: &MCPConfig{Name: "probe", Version: "0", Authenticate: okAuth},
+		Routes: []Route{{
+			Path: "/anything",
+			Endpoints: Endpoints{POST: Endpoint{
+				Body:    BodyOf[map[string]any](),
+				MCPTool: &MCPTool{Name: "post_anything", Description: "d"},
+				Handler: func(http.ResponseWriter, *http.Request) {},
+			}},
+		}},
+	})
+	if err != nil {
+		t.Fatalf("NewApp: %v", err)
+	}
+	tools, err := app.mcpTools(app.mcp)
+	if err != nil {
+		t.Fatalf("building tools: %v", err)
+	}
+	res, err := tools[0].Call(context.Background(), mcpCall("post_anything", `{"whatever":1}`))
+	if err != nil {
+		t.Fatalf("Call: %v", err)
+	}
+	if res.Reject != "" {
+		t.Errorf("a free-form body refused an undeclared key: %q", res.Reject)
+	}
+}

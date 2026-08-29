@@ -5,8 +5,10 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"net/http"
 	"net/url"
+	"slices"
 	"strings"
 	"time"
 
@@ -110,11 +112,16 @@ func (a *App) bindTool(path, method string, ep Endpoint, cfg *MCPConfig) (mcpsrv
 			}
 		}
 	}
+	var bodyNames []string
+	// A body declared as an object with no field list is a map: its keys are not
+	// known ahead of time, so anything left over legitimately belongs to it.
+	freeFormBody := ep.Body != nil && len(ep.Body.Fields) == 0
 	if body := ep.Body; body != nil {
 		if body.Kind != KindObject {
 			return mcpsrv.Tool{}, fmt.Errorf("body is %s; a tool's arguments must be an object", body.Kind)
 		}
 		for _, f := range body.Fields {
+			bodyNames = append(bodyNames, f.Name)
 			if _, clash := props[f.Name]; clash {
 				return mcpsrv.Tool{}, fmt.Errorf("body field %q collides with a path parameter or query field of the same name", f.Name)
 			}
@@ -140,7 +147,15 @@ func (a *App) bindTool(path, method string, ep Endpoint, cfg *MCPConfig) (mcpsrv
 		Description: decl.Description,
 		ReadOnly:    readOnly,
 		InputSchema: schema,
-		Call:        a.toolDispatch(boundTool{decl.Name, method, path, params, queryNames}, cfg),
+		Call: a.toolDispatch(boundTool{
+			name:         decl.Name,
+			method:       method,
+			path:         path,
+			pathParams:   params,
+			queryNames:   queryNames,
+			bodyNames:    bodyNames,
+			freeFormBody: freeFormBody,
+		}, cfg),
 	}, nil
 }
 
@@ -152,11 +167,26 @@ var errStack = errors.New("the server failed to handle this tool call")
 
 // boundTool is a tool resolved against the declaration it calls.
 type boundTool struct {
-	name       string
-	method     string
-	path       string
-	pathParams []pathArg
-	queryNames []string
+	name         string
+	method       string
+	path         string
+	pathParams   []pathArg
+	queryNames   []string
+	bodyNames    []string
+	freeFormBody bool
+}
+
+// accepts lists every argument name this tool takes, for an error message that
+// tells an assistant what it could have sent instead.
+func (t boundTool) accepts() []string {
+	out := make([]string, 0, len(t.pathParams)+len(t.queryNames)+len(t.bodyNames))
+	for _, p := range t.pathParams {
+		out = append(out, p.name)
+	}
+	out = append(out, t.queryNames...)
+	out = append(out, t.bodyNames...)
+	slices.Sort(out)
+	return out
 }
 
 // toolDispatch builds the closure a tool is called through.
@@ -217,7 +247,13 @@ func (a *App) toolDispatch(t boundTool, cfg *MCPConfig) func(context.Context, mc
 			call.Outcome = ToolOutcomeRejected
 			return mcpsrv.Result{Reject: "arguments must be a JSON object"}, nil
 		}
-		call.Arguments = args
+		// Cloned, not aliased. splitArgs consumes the map as it routes — deleting
+		// each argument it places in the path or the query — so sharing it would
+		// leave the record holding only what vov failed to understand, which for
+		// a read tool whose inputs are all path parameters is nothing at all.
+		// Copying before the split is also what keeps a rejected call's record
+		// whole, since that path returns before the split finishes.
+		call.Arguments = maps.Clone(args)
 
 		path, query, body, mapErr := t.splitArgs(args)
 		if mapErr != nil {
@@ -305,8 +341,28 @@ func (t boundTool) splitArgs(args map[string]json.RawMessage) (path string, quer
 		}
 	}
 
-	// Whatever is left is the body. An endpoint declaring no body gets none.
+	// Whatever is left is the body — but only what the body actually declares.
+	//
+	// An argument matching nothing used to be forwarded anyway, which meant a
+	// model that invented a parameter name had it silently marshalled into a
+	// request the endpoint never advertised, and learned nothing. The schema
+	// already names every argument this tool takes, so anything else is a
+	// mistake worth saying out loud: "unknown argument" is something an
+	// assistant can act on, and silence is not.
 	if len(args) > 0 {
+		if !t.freeFormBody {
+			var unknown []string
+			for name := range args {
+				if !slices.Contains(t.bodyNames, name) {
+					unknown = append(unknown, name)
+				}
+			}
+			if len(unknown) > 0 {
+				slices.Sort(unknown) // map order would make the message vary
+				return "", nil, nil, fmt.Errorf("unknown argument(s) %s; this tool accepts %s",
+					strings.Join(quoteAll(unknown), ", "), strings.Join(quoteAll(t.accepts()), ", "))
+			}
+		}
 		if body, err = json.Marshal(args); err != nil {
 			return "", nil, nil, fmt.Errorf("encoding the request body: %w", err)
 		}
@@ -348,6 +404,15 @@ func queryArg(raw json.RawMessage) ([]string, error) {
 		return nil, nil
 	}
 	return []string{v}, nil
+}
+
+// quoteAll renders names for an error message.
+func quoteAll(names []string) []string {
+	out := make([]string, len(names))
+	for i, n := range names {
+		out[i] = fmt.Sprintf("%q", n)
+	}
+	return out
 }
 
 // scalarArg renders a JSON tool argument as the string a path or query carries.
