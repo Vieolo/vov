@@ -102,7 +102,22 @@ type Schema struct {
 
 // BodyOf describes T as an endpoint's request body.
 //
-// Pass the type the handler decodes into:
+// Pass the type that describes the *contract* — what a caller may send. Often
+// that is the type the handler decodes into, and keeping them the same is worth
+// something: the declaration and the code that reads it cannot then drift.
+//
+// It is not always the same, and should not be forced to be. A handler that
+// decodes into a domain model would, by declaring it, advertise every field of
+// that model — including the ones the server owns and overwrites, which a caller
+// must not set and an assistant should never be offered. Declaring a narrower
+// type is the safer direction and the recommended one there: a field added to
+// the model later is not silently published as an input.
+//
+// vov cannot check that the two agree — a handler is opaque to it — so this is
+// convention either way. The trade is between drift vov cannot detect and a
+// surface that is wrong on purpose, and the second is worse.
+//
+// A body type in the simple case:
 //
 //	type createProject struct {
 //	    Name    string  `json:"name" vov:"required"`

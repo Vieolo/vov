@@ -445,7 +445,10 @@ func recoverPanic(log *slog.Logger) vov.Middleware {
 // Only the argument *names* are recorded. Their values are a founder's note body
 // or an investor's name as often as not, and a sink that writes them verbatim is
 // one careless log line from putting private text where it does not belong.
-func auditToolCall(c vov.ToolCall) {
+func auditToolCall(ctx context.Context, c vov.ToolCall) {
+	// The call's values, without its cancellation — so a row still gets written
+	// when an assistant hangs up mid-call, which is exactly when one matters.
+	_ = ctx
 	names := make([]string, 0, len(c.Arguments))
 	for k := range c.Arguments {
 		names = append(names, k)

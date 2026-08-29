@@ -1,6 +1,6 @@
 name: vov
 description: Battery-included declarative Go backend framework
-version: 0.3.1
+version: 0.4.0
 schema_version: 0
 repository: https://github.com/vieolo/vov
 issue_tracker: https://github.com/vieolo/vov/issues

@@ -12,10 +12,10 @@ import (
 )
 
 // auditApp builds an app with one tool, recording every call its sink is handed.
-func auditApp(t *testing.T, auth Authenticator, seen *[]ToolCall, sink func(ToolCall)) *App {
+func auditApp(t *testing.T, auth Authenticator, seen *[]ToolCall, sink func(context.Context, ToolCall)) *App {
 	t.Helper()
 	if sink == nil {
-		sink = func(c ToolCall) { *seen = append(*seen, c) }
+		sink = func(_ context.Context, c ToolCall) { *seen = append(*seen, c) }
 	}
 	app, err := NewApp(AppConfig{
 		API: APIConfig{Authenticator: auth},
@@ -152,7 +152,7 @@ func TestUnresolvableCallerIsObservedAsFailed(t *testing.T) {
 // committed, so a sink that panics must not turn a written row into a reported
 // failure. Nor may a missing sink change anything.
 func TestObserverCannotFailTheCall(t *testing.T) {
-	app := auditApp(t, okAuth, nil, func(ToolCall) { panic("the audit sink is down") })
+	app := auditApp(t, okAuth, nil, func(context.Context, ToolCall) { panic("the audit sink is down") })
 
 	tools, err := app.mcpTools(app.mcp)
 	if err != nil {
@@ -179,7 +179,7 @@ func TestPanickingToolIsContained(t *testing.T) {
 		API: APIConfig{Authenticator: okAuth},
 		MCP: &MCPConfig{
 			Name: "probe", Version: "0", Authenticate: okAuth,
-			OnToolCall: func(c ToolCall) { seen = append(seen, c) },
+			OnToolCall: func(_ context.Context, c ToolCall) { seen = append(seen, c) },
 		},
 		Routes: []Route{{
 			Path: "/boom",

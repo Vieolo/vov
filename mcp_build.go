@@ -195,7 +195,7 @@ func (a *App) toolDispatch(t boundTool, cfg *MCPConfig) func(context.Context, mc
 			if err == nil && out.Reject == "" {
 				call.Outcome = outcomeOf(out.Status)
 			}
-			observeToolCall(cfg, call)
+			observeToolCall(ctx, cfg, call)
 		}()
 
 		// The application resolves the caller from the transport's headers. A
@@ -294,12 +294,12 @@ func (t boundTool) splitArgs(args map[string]json.RawMessage) (path string, quer
 			if !ok {
 				continue
 			}
-			v, err := scalarArg(raw)
+			vs, err := queryArg(raw)
 			if err != nil {
 				return "", nil, nil, fmt.Errorf("argument %q: %w", n, err)
 			}
-			if v != "" {
-				query.Set(n, v)
+			for _, v := range vs {
+				query.Add(n, v)
 			}
 			delete(args, n)
 		}
@@ -312,6 +312,42 @@ func (t boundTool) splitArgs(args map[string]json.RawMessage) (path string, quer
 		}
 	}
 	return path, query, body, nil
+}
+
+// queryArg renders a JSON tool argument as the values a query string carries.
+//
+// A list becomes a repeated parameter, which is what [QueryOf] has always
+// permitted a query field to be: it accepts a scalar or a list of scalars and
+// rejects only a list of objects. Dispatch used to accept the scalar and refuse
+// the list, so a declaration vov validated at construction could fail at call
+// time — the one kind of failure vov is arranged to make impossible.
+func queryArg(raw json.RawMessage) ([]string, error) {
+	// A JSON array unmarshals into this; anything else does not, which is a
+	// cheaper test than inspecting the bytes and is exact.
+	var list []json.RawMessage
+	if err := json.Unmarshal(raw, &list); err == nil {
+		out := make([]string, 0, len(list))
+		for i, elem := range list {
+			v, err := scalarArg(elem)
+			if err != nil {
+				return nil, fmt.Errorf("element %d: %w", i, err)
+			}
+			out = append(out, v)
+		}
+		return out, nil
+	}
+
+	v, err := scalarArg(raw)
+	if err != nil {
+		return nil, err
+	}
+	if v == "" {
+		// An empty scalar is an omitted parameter rather than an empty one: a
+		// handler reading q.Get sees the same thing either way, and sending it
+		// would make "unset" and "set to nothing" indistinguishable.
+		return nil, nil
+	}
+	return []string{v}, nil
 }
 
 // scalarArg renders a JSON tool argument as the string a path or query carries.
