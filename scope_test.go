@@ -425,3 +425,29 @@ func TestResolveScope(t *testing.T) {
 		),
 	)
 }
+
+func TestValidateScope(t *testing.T) {
+	assert.Nil(t, validateScopes(Endpoint{
+		ScopeAllOf: ScopeAllOf{RequestModeAPI: []string{"one"}},
+	}))
+
+	// Invalid request mode
+	assert.Error(t, validateScopes(Endpoint{
+		ScopeAllOf: ScopeAllOf{RequestMode("Hello"): []string{"one"}},
+	}))
+
+	// auth not required
+	assert.Error(t, validateScopes(Endpoint{
+		AuthMode:   AuthModeNone,
+		ScopeAllOf: ScopeAllOf{RequestModeAPI: []string{"one"}},
+	}))
+
+	// Contains empty string
+	assert.Error(t, validateScopes(Endpoint{
+		ScopeAllOf: ScopeAllOf{RequestModeAPI: []string{"one", ""}},
+	}))
+
+	assert.Error(t, validateScopes(Endpoint{
+		ScopeAllOf: ScopeAllOf{RequestModeAPI: []string{"one", " "}},
+	}))
+}

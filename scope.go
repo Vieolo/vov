@@ -3,6 +3,7 @@ package vov
 import (
 	"context"
 	"fmt"
+	"strings"
 )
 
 // ScopeAllOf declares the scopes a credential must carry, per channel.
@@ -126,7 +127,7 @@ func validateScopes(e Endpoint) error {
 			return fmt.Errorf("ScopeAllOf is keyed by an unknown mode %q (use %q or %q)", string(m), RequestModeAPI, RequestModeMCP)
 		}
 		for _, s := range allOf {
-			if s == "" {
+			if strings.TrimSpace(s) == "" {
 				return fmt.Errorf("ScopeAllOf[%s] declares an empty scope name", m)
 			}
 		}
