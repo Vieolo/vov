@@ -3,7 +3,6 @@ package vov
 import (
 	"context"
 	"fmt"
-	"slices"
 )
 
 // ScopeAllOf declares the scopes a credential must carry, per channel.
@@ -24,46 +23,35 @@ type ScopeAllOf = map[RequestMode][]string
 // [AppConfig.Scopes] would otherwise apply.
 func ScopeNone() ScopeAllOf { return ScopeAllOf{RequestModeAPI: {}, RequestModeMCP: {}} }
 
-// ScopePolicy is the app-wide half of the scope declaration: which channels
-// enforce scopes at all, and what an endpoint that names none requires.
+// ScopePolicy is the app-wide scope declaration, stating which RequestModes
+// requires which scopes for different methods.
 //
-// It exists so that the deployment fact — "this application's scopes govern its
-// MCP channel" — is written once rather than repeated on every endpoint. An
-// endpoint restating it would be exactly the duplication [Route] exists to
-// remove, and across sixty endpoints it is a line somebody eventually forgets.
+// A scope defined for a RequestMode and Method combo will be applied to the entire
+// app, removing the need to declare the scopes in each endpoint individually.
+// If, however, an endpoint requires a different set of scopes than what is described
+// in the AppConfig, the endpoint can override the scope requirements.
+//
+// Any missing field/key or empty slice is interpreted as "no scope required".
+//
+// Example:
+//
+//	 Scopes: &vov.ScopePolicy{
+//	 	API: map[string][]string{
+//				http.MethodGet:    {"tasks:read"},
+//				http.MethodPost:   {"tasks:write"},
+//				http.MethodDelete:    {"tasks:read", "tasks:delete"},
+//			},
+//		},
+//	 	MCP: map[string][]string{
+//				http.MethodGet:    {"tasks:read"},
+//				http.MethodPost:   {"tasks:write"},
+//				http.MethodPut:    {"tasks:read", "tasks:write"},
+//			},
+//		},
+//
+// Have in mind that `vov` has no understanding of the vocabulary of your scopes,
+// treats any given string equally, and only uses your declaration to make a distinction
 type ScopePolicy struct {
-	// API and MCP are the per-channel defaults, each mapping an HTTP method to
-	// the scopes an endpoint that declares none requires. Use the empty string
-	// for endpoints declared under [Endpoints.Any].
-	//
-	//	MCP: map[string][]string{
-	//	    http.MethodGet:  {"tasks:read"},
-	//	    http.MethodPost: {"tasks:write"},
-	//	}
-	//
-	// A nil map means that channel has no scope model and is not governed, which
-	// is the common case for the HTTP API of an application whose OAuth server
-	// exists for its assistants: a browser session carries no scopes at all, and
-	// governing it would refuse every browser call. Keying by channel is what
-	// makes that a fact you can see in one place rather than assemble from two,
-	// and it lets the channels differ — an API that gates only deletion while
-	// every tool call is scoped is a policy, not a workaround.
-	//
-	// A method absent from a map requires no scopes on that channel, so gating a
-	// single method takes a single entry rather than an enumeration of the rest.
-	//
-	// Keying by method — rather than listing endpoints — is what keeps this from
-	// being a thing to remember. A new mutating endpoint is governed the moment
-	// it exists, because its method was already spoken for; there is no per-route
-	// line for anyone to forget. That is the whole reason a default lives here at
-	// all, and the reason it is the recommended way to use scopes.
-	//
-	// It is nonetheless all vov can derive. vov does not know an application's
-	// scope vocabulary — a token may carry "read", or "investors:delete", or
-	// anything else — so it cannot infer a requirement from the method the way
-	// [MCPTool.ReadOnly] infers read-only-ness. An app whose scopes are
-	// method-shaped gets the requirement for free; one whose scopes are not
-	// leaves these empty and declares [Endpoint.ScopeAllOf] per endpoint.
 	API map[string][]string
 	MCP map[string][]string
 }
@@ -99,20 +87,6 @@ func (s *scopeCheck) requiredIn(m RequestMode) []string {
 		return nil
 	}
 	return s.byMode[m]
-}
-
-// satisfiedBy reports whether the granted scopes cover everything required.
-//
-// A credential that carried none satisfies nothing, which is the fail-closed
-// reading and the only honest one: an endpoint that says it needs a scope has
-// said the bare credential is not enough.
-func satisfiedBy(granted, required []string) bool {
-	for _, want := range required {
-		if !slices.Contains(granted, want) {
-			return false
-		}
-	}
-	return true
 }
 
 // resolveScope resolves an endpoint's effective requirement, per channel.

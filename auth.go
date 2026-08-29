@@ -4,6 +4,8 @@ import (
 	"context"
 	"net/http"
 	"slices"
+
+	"github.com/vieolo/vov/internal/utils"
 )
 
 // User is the principal a request acts as. It is behavioral and deliberately
@@ -324,7 +326,7 @@ func authGuard(next http.Handler, auth Authenticator, e Endpoint, sc *scopeCheck
 			http.Error(w, http.StatusText(http.StatusUnauthorized), http.StatusUnauthorized)
 			return
 		}
-		if want := sc.requiredIn(ModeFrom(r.Context())); !satisfiedBy(scopes, want) {
+		if want := sc.requiredIn(ModeFrom(r.Context())); !utils.RequestSliceSatisfiesPolicy(scopes, want) {
 			http.Error(w, http.StatusText(http.StatusForbidden), http.StatusForbidden)
 			return
 		}
