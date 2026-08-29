@@ -1,5 +1,9 @@
 # Changelog
 
+## v0.4.1 (2026-08-29)
+- Fixed `ToolCall.Arguments` arriving empty. It is now copied before routing, which also keeps a rejected call's record whole
+- A tool argument the endpoint does not declare is now refused, naming it and listing what the tool does accept, instead of being marshalled into the request body
+
 ## v0.4.0 (2026-08-29)
 - Query fields declared as a list of scalars are now dispatched as repeated parameters (`?tag=a&tag=b`). `QueryOf` always accepted them and the dispatcher rejected them, so a declaration `vov` validated at construction could still fail at call time
 - `BodyOf` now advises declaring the type describing the contract, which may be narrower than the one the handler decodes into. Declaring a domain model offers an assistant every field on it, including the ones the server owns
