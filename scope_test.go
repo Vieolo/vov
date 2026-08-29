@@ -9,7 +9,7 @@ import (
 
 // scopedApp builds an app whose one protected route requires the given rule, and
 // whose authenticator grants the given scopes.
-func scopedApp(t *testing.T, rule *ScopeRule, policy *ScopePolicy, granted []string) *App {
+func scopedApp(t *testing.T, rule ScopeAllOf, policy *ScopePolicy, granted []string) *App {
 	t.Helper()
 	app, err := NewApp(AppConfig{
 		Scopes: policy,
@@ -52,7 +52,7 @@ func getStatus(t *testing.T, app *App) int {
 // TestScopeAllOfRequiresEveryScope pins the all-of semantics: a partial grant is
 // not a partial pass.
 func TestScopeAllOfRequiresEveryScope(t *testing.T) {
-	rule := &ScopeRule{AllOf: []string{"read", "write"}}
+	rule := ScopeAllOf{RequestModeAPI: {"read", "write"}}
 
 	if got := getStatus(t, scopedApp(t, rule, nil, []string{"read", "write"})); got != http.StatusOK {
 		t.Errorf("full grant: got %d, want 200", got)
@@ -66,17 +66,17 @@ func TestScopeAllOfRequiresEveryScope(t *testing.T) {
 // calls SetScopes leaves the credential with nothing, and an endpoint that
 // declared a requirement has already said a bare credential is not enough.
 func TestMissingScopesRefuse(t *testing.T) {
-	app := scopedApp(t, &ScopeRule{AllOf: []string{"read"}}, nil, nil)
+	app := scopedApp(t, ScopeAllOf{RequestModeAPI: {"read"}}, nil, nil)
 	if got := getStatus(t, app); got != http.StatusForbidden {
 		t.Errorf("credential with no scopes: got %d, want 403", got)
 	}
 }
 
-// TestScopeModesLimitEnforcement is the reason ScopeRule is a struct rather than
-// a string slice. The same declaration governs one channel and exempts the other,
-// so an app whose tokens exist only for its tools does not refuse every browser.
+// TestScopeModesLimitEnforcement is the reason the declaration is keyed by
+// channel. One channel is governed and the other exempt, so an app whose tokens
+// exist only for its tools does not refuse every browser.
 func TestScopeModesLimitEnforcement(t *testing.T) {
-	rule := &ScopeRule{AllOf: []string{"write"}, Modes: []RequestMode{RequestModeMCP}}
+	rule := ScopeAllOf{RequestModeMCP: {"write"}}
 	app := scopedApp(t, rule, nil, nil) // no scopes granted at all
 
 	// Over the API the rule does not apply, so a scopeless credential passes.
@@ -110,7 +110,7 @@ func TestScopesAreCheckedBeforeRoles(t *testing.T) {
 		Routes: []Route{{
 			Path: "/probe",
 			Endpoints: Endpoints{GET: Endpoint{
-				ScopeAllOf: &ScopeRule{AllOf: []string{"write"}},
+				ScopeAllOf: ScopeAllOf{RequestModeAPI: {"write"}},
 				RolesAnyOf: []string{"admin"},
 				Handler:    func(http.ResponseWriter, *http.Request) {},
 			}},
@@ -200,7 +200,7 @@ func TestScopeAllOfWithAuthModeNoneIsRejected(t *testing.T) {
 			Path: "/probe",
 			Endpoints: Endpoints{GET: Endpoint{
 				AuthMode:   AuthModeNone,
-				ScopeAllOf: &ScopeRule{AllOf: []string{"read"}},
+				ScopeAllOf: ScopeAllOf{RequestModeAPI: {"read"}},
 				Handler:    func(http.ResponseWriter, *http.Request) {},
 			}},
 		}},
@@ -222,7 +222,7 @@ func TestScopesReachTheHandler(t *testing.T) {
 		Routes: []Route{{
 			Path: "/probe",
 			Endpoints: Endpoints{GET: Endpoint{
-				ScopeAllOf: &ScopeRule{AllOf: []string{"read"}},
+				ScopeAllOf: ScopeAllOf{RequestModeAPI: {"read"}},
 				Handler: func(w http.ResponseWriter, r *http.Request) {
 					seen, _ = ScopesFrom(r.Context())
 				},
@@ -291,5 +291,28 @@ func TestChannelsCanBeGovernedDifferently(t *testing.T) {
 	app.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodDelete, "/probe", nil))
 	if rec.Code != http.StatusForbidden {
 		t.Errorf("API DELETE (governed): got %d, want 403", rec.Code)
+	}
+}
+
+// TestUnnamedChannelFallsBackToThePolicy: naming one channel does not decide the
+// other, which is what map-key presence buys over a modes list.
+func TestUnnamedChannelFallsBackToThePolicy(t *testing.T) {
+	policy := &ScopePolicy{API: map[string][]string{http.MethodGet: {"read"}}}
+	app := scopedApp(t, ScopeAllOf{RequestModeMCP: {"write"}}, policy, nil)
+
+	// The endpoint said nothing about the API channel, so the policy still governs it.
+	if got := getStatus(t, app); got != http.StatusForbidden {
+		t.Errorf("API: got %d, want 403 from the policy default", got)
+	}
+}
+
+// TestEmptyListRequiresNothing: a named channel with no scopes overrides the
+// policy rather than inheriting it.
+func TestEmptyListRequiresNothing(t *testing.T) {
+	policy := &ScopePolicy{API: map[string][]string{http.MethodGet: {"read"}}}
+	app := scopedApp(t, ScopeAllOf{RequestModeAPI: {}}, policy, nil)
+
+	if got := getStatus(t, app); got != http.StatusOK {
+		t.Errorf("got %d, want 200: an empty list requires no scopes", got)
 	}
 }

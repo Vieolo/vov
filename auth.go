@@ -101,7 +101,8 @@ func NewAuthResponse(h http.Header) AuthResponse {
 // non-empty requirement. That is the fail-closed reading and the intended one: an
 // endpoint declaring a scope has said a bare credential is not enough. A channel
 // with no scope model at all — a browser session, typically — is exempted by
-// naming the channel in [ScopeRule.Modes], not by leaving this uncalled.
+// leaving that channel out of [Endpoint.ScopeAllOf] and [AppConfig.Scopes], not
+// by leaving this uncalled.
 func (a AuthResponse) SetScopes(scopes []string) {
 	if a.state != nil {
 		a.state.scopes = scopes
