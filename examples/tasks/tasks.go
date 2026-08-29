@@ -102,6 +102,10 @@ func itemEndpoints() vov.Endpoints {
 type listTasksQuery struct {
 	Owner string `json:"owner" jsonschema:"filter to one owner, matched exactly against the name a task was created under"`
 	Limit int    `json:"limit" jsonschema:"how many tasks to return; omit for all of them"`
+	// A list of scalars becomes a repeated query parameter — ?tag=a&tag=b — and
+	// an array argument in the tool schema. QueryOf permits it and dispatch
+	// honours it; a list of objects is refused by both.
+	Tag []string `json:"tag" jsonschema:"repeat to narrow to tasks carrying every listed tag"`
 }
 
 func listTasks(w http.ResponseWriter, r *http.Request) {

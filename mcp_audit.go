@@ -1,6 +1,7 @@
 package vov
 
 import (
+	"context"
 	"encoding/json"
 	"time"
 )
@@ -76,12 +77,16 @@ type ToolCall struct {
 // committed whatever it was going to commit, so there is nothing left to undo and
 // nothing useful to do with a complaint. Turning a written row into a reported
 // failure would be a lie about what happened.
-func observeToolCall(cfg *MCPConfig, call ToolCall) {
+func observeToolCall(ctx context.Context, cfg *MCPConfig, call ToolCall) {
 	if cfg.OnToolCall == nil {
 		return
 	}
 	defer func() { _ = recover() }()
-	cfg.OnToolCall(call)
+	// Values without cancellation. A sink wants the trace id and the request
+	// scope the call carried; it must not lose the row because the assistant
+	// hung up, and the row describes something that already happened, so there
+	// is nothing left for a deadline to save.
+	cfg.OnToolCall(context.WithoutCancel(ctx), call)
 }
 
 // outcomeOf classifies a completed dispatch.
