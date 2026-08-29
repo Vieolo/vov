@@ -3,7 +3,6 @@ package vov
 import (
 	"context"
 	"net/http"
-	"slices"
 
 	"github.com/vieolo/vov/internal/utils"
 )
@@ -13,29 +12,31 @@ import (
 // lives on the model — the app decides what a role or a permission means — while
 // policy lives on the endpoint declaration, where it can be read and reviewed.
 //
-// A model that does not use roles or permissions answers false, which is both
+// A model that does not use roles or permissions returns nothing, which is both
 // honest and fail-closed: an endpoint that later requires one is refused rather
 // than accidentally opened.
 //
-// vov asks only what the matched endpoint declares: HasRole only when the
-// endpoint lists roles, HasPermission once per listed permission, Tier only when
-// it sets MinTier. An endpoint that declares none of them costs none of them.
+// Return the *effective* sets. If an application's roles imply permissions, or a
+// wildcard covers a family of them, expand that here — vov compares strings, and
+// which of an application's values imply which others is a fact about its own
+// model. [AuthResponse.SetScopes] says the same about scopes, for the same
+// reason.
 //
-// So an answer that needs I/O — a paid-until lookup, a permission table — can be
-// resolved lazily on first call and cached for the rest of the request. Prefer
-// that to resolving everything in the [Authenticator]: the Authenticator is not
-// told which endpoint matched, so work done there is paid on every authenticated
-// request whether the endpoint consults it or not. Do cache, though — a route
-// listing two permissions asks twice.
+// vov asks only what the matched endpoint declares, and asks once: Roles only
+// when the endpoint lists roles, Permissions only when it lists permissions, Tier
+// only when it sets MinTier. An endpoint declaring none of them costs none of
+// them, and one declaring three permissions still costs a single call.
 type User interface {
 	// IsAuthenticated reports whether the request carries a valid principal.
 	IsAuthenticated() bool
 
-	// HasRole reports whether the user holds the named role.
-	HasRole(role string) bool
+	// Roles are the roles the user holds. An endpoint's [Endpoint.RolesAnyOf] is
+	// satisfied by any one of them.
+	Roles() []string
 
-	// HasPermission reports whether the user holds the named permission.
-	HasPermission(permission string) bool
+	// Permissions are the permissions the user holds. An endpoint's
+	// [Endpoint.PermissionsAllOf] requires every one it lists.
+	Permissions() []string
 
 	// Tier reports the user's paid tier: 0 for free, and higher numbers for
 	// higher subscriptions. It is ordinal, so an endpoint declaring
@@ -208,13 +209,13 @@ func (a AuthMode) valid() bool {
 //
 // Either list being empty means it places no requirement.
 func authorized(u User, roles, permissions []string) bool {
-	if len(roles) > 0 && !slices.ContainsFunc(roles, u.HasRole) {
+	// Guarded, so an endpoint that declares neither asks for neither. The
+	// accessors are where an application does its lookup.
+	if len(roles) > 0 && !utils.RequestSliceSatisfiesAnyPolicy(u.Roles(), roles) {
 		return false
 	}
-	for _, p := range permissions {
-		if !u.HasPermission(p) {
-			return false
-		}
+	if len(permissions) > 0 && !utils.RequestSliceSatisfiesPolicy(u.Permissions(), permissions) {
+		return false
 	}
 	return true
 }
@@ -293,7 +294,7 @@ func UserFrom(ctx context.Context) (User, bool) {
 // not issued for this operation cannot perform it no matter who holds it, so
 // asking what its owner is allowed to do is asking about the wrong thing. It is
 // also the cheapest check — the scopes came off the credential during
-// authentication and are already in memory, while HasRole and HasPermission are
+// authentication and are already in memory, while Roles and Permissions are
 // where an application is invited to do lazy I/O.
 func authGuard(next http.Handler, auth Authenticator, e Endpoint, sc *scopeCheck) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

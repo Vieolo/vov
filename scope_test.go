@@ -37,10 +37,10 @@ func scopedApp(t *testing.T, rule ScopeAllOf, policy *ScopePolicy, granted []str
 // refuse it.
 type scopeUser struct{}
 
-func (scopeUser) IsAuthenticated() bool     { return true }
-func (scopeUser) HasRole(string) bool       { return false }
-func (scopeUser) HasPermission(string) bool { return false }
-func (scopeUser) Tier() int                 { return 0 }
+func (scopeUser) IsAuthenticated() bool { return true }
+func (scopeUser) Roles() []string       { return nil }
+func (scopeUser) Permissions() []string { return nil }
+func (scopeUser) Tier() int             { return 0 }
 
 func getStatus(t *testing.T, app *App) int {
 	t.Helper()
@@ -100,7 +100,7 @@ func TestScopeModesLimitEnforcement(t *testing.T) {
 
 // TestScopesAreCheckedBeforeRoles pins the ordering. A credential not issued for
 // the operation cannot perform it whoever holds it, so the scope is decided
-// first — and the check is the cheap one, before any HasRole that may do I/O.
+// first — and the check is the cheap one, before any Roles() that may do I/O.
 func TestScopesAreCheckedBeforeRoles(t *testing.T) {
 	askedRole := false
 	app, err := NewApp(AppConfig{
@@ -123,16 +123,16 @@ func TestScopesAreCheckedBeforeRoles(t *testing.T) {
 		t.Fatalf("got %d, want 403", got)
 	}
 	if askedRole {
-		t.Error("the role was checked after the scope had already refused the request")
+		t.Error("roles were fetched after the scope had already refused the request")
 	}
 }
 
 type roleProbeUser struct{ asked *bool }
 
-func (roleProbeUser) IsAuthenticated() bool     { return true }
-func (u roleProbeUser) HasRole(string) bool     { *u.asked = true; return true }
-func (roleProbeUser) HasPermission(string) bool { return false }
-func (roleProbeUser) Tier() int                 { return 0 }
+func (roleProbeUser) IsAuthenticated() bool { return true }
+func (u roleProbeUser) Roles() []string     { *u.asked = true; return []string{"admin"} }
+func (roleProbeUser) Permissions() []string { return nil }
+func (roleProbeUser) Tier() int             { return 0 }
 
 // TestPolicyDefaultGovernsAnUndeclaredEndpoint is the property the whole
 // ByMethod mechanism exists for: an endpoint that says nothing is still governed,
@@ -316,3 +316,44 @@ func TestEmptyListRequiresNothing(t *testing.T) {
 		t.Errorf("got %d, want 200: an empty list requires no scopes", got)
 	}
 }
+
+// TestAccessorsAreAskedOnlyWhenDeclared: the point of the slice accessors is one
+// lookup instead of N, and an endpoint declaring neither must still cost neither.
+func TestAccessorsAreAskedOnlyWhenDeclared(t *testing.T) {
+	var roleCalls, permCalls int
+	mk := func(e Endpoint) *App {
+		t.Helper()
+		e.Handler = func(http.ResponseWriter, *http.Request) {}
+		app, err := NewApp(AppConfig{
+			API: APIConfig{Authenticator: func(AuthResponse, *http.Request) (User, error) {
+				return countingUser{&roleCalls, &permCalls}, nil
+			}},
+			Routes: []Route{{Path: "/probe", Endpoints: Endpoints{GET: e}}},
+		})
+		if err != nil {
+			t.Fatalf("NewApp: %v", err)
+		}
+		return app
+	}
+
+	getStatus(t, mk(Endpoint{}))
+	if roleCalls != 0 || permCalls != 0 {
+		t.Errorf("an endpoint declaring nothing asked for roles %d times and permissions %d", roleCalls, permCalls)
+	}
+
+	roleCalls, permCalls = 0, 0
+	getStatus(t, mk(Endpoint{PermissionsAllOf: []string{"a", "b", "c"}}))
+	if permCalls != 1 {
+		t.Errorf("three declared permissions cost %d lookups, want 1", permCalls)
+	}
+	if roleCalls != 0 {
+		t.Errorf("roles were fetched for an endpoint declaring none")
+	}
+}
+
+type countingUser struct{ roles, perms *int }
+
+func (countingUser) IsAuthenticated() bool   { return true }
+func (u countingUser) Roles() []string       { *u.roles++; return []string{"admin"} }
+func (u countingUser) Permissions() []string { *u.perms++; return []string{"a", "b", "c"} }
+func (countingUser) Tier() int               { return 0 }
