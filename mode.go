@@ -29,6 +29,41 @@ import "context"
 // The line that holds in practice: shape the request and the response by mode,
 // decide the outcome by the declaration.
 //
+// # A worked example, because the line reads stricter than it is
+//
+// A directory endpoint returns a compact row to an assistant and the full record
+// to a browser:
+//
+//	func listInvestors(w http.ResponseWriter, r *http.Request) {
+//	    found := store.Search(filtersFrom(r))
+//	    if vov.ModeFrom(r.Context()) == vov.RequestModeMCP {
+//	        writeJSON(w, http.StatusOK, compact(found)) // id, name, fit
+//	        return
+//	    }
+//	    writeJSON(w, http.StatusOK, found)
+//	}
+//
+// That is on the permitted side, and squarely so. The same rows are found for
+// both callers, by the same query, after the same declared policy has admitted
+// them; only how much of each is written differs. An application metering full
+// reads has a second reason to do this and it is the same reason — what a caller
+// is charged for is what it was handed.
+//
+// The same shape becomes a violation one step further:
+//
+//	if vov.ModeFrom(r.Context()) == vov.RequestModeMCP {
+//	    found = onlyPublic(found) // ✗ a policy no reviewer can see
+//	}
+//
+// Which rows a caller may see is [Endpoint.RolesAnyOf], [Endpoint.MinTier] and
+// [Endpoint.ScopeAllOf] — declared, rendered in [Manifest], and reviewable in a
+// diff. Deciding it here hides the app's real authorization rule inside a handler,
+// which is the second implementation this whole design exists to prevent.
+//
+// The test that separates them: would the other channel, given the same
+// credential, be entitled to what this branch withheld? If yes it is rendering.
+// If no it is policy, and belongs in the declaration.
+//
 // # It cannot be set from outside
 //
 // There is no wire representation and no exported setter. That is a security

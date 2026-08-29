@@ -101,6 +101,13 @@ directive in `go.mod`).
   gone but its signed cookie stays valid for 30 days, so the request is refused
   **and** the cookie is cleared on the way out. The same call on the success
   branch is how you rotate a session for sliding expiry.
+- **One endpoint, two renderings** — `listTasks` writes the full record for a
+  browser and a compact row for an assistant, keyed on `vov.ModeFrom`. This is
+  the permitted side of `RequestMode`'s line and the example exists to show
+  where that line is: what varies is how much of each row is written, not which
+  rows are returned or who may see them. Filtering rows by channel would be a
+  policy no reviewer can see, and belongs in the declaration instead.
+
 - **A seam around the whole handler** — `APIConfig.ServerWrappers` wrap the
   assembled mux, so it also sees the requests the mux answers *itself*:
 
