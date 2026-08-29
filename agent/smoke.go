@@ -371,6 +371,14 @@ func checkMCP(r *report) {
 	isErr, _ = callTool("create_task", map[string]any{"title": "nope"}, tokReadOnly)
 	r.check("MCP  create_task (read-only grant)", isErr, true)
 
+	// The same endpoint, the same principal, two renderings. What varies is how
+	// much of each row is written; which rows, and who may see them, do not.
+	apiBody := do("GET", "/tasks", auth(tokMember)).Body
+	_, mcpText := callTool("list_tasks", map[string]any{}, tokMember)
+	r.check("     API rendering is the full record", strings.Contains(string(apiBody), `"owner"`), true)
+	r.check("     MCP rendering is compact", strings.Contains(mcpText, `"owner"`), false)
+	r.check("     ...and still identifies each row", strings.Contains(mcpText, `"title"`), true)
+
 	// A path parameter reaches the model under its declared name, not the route
 	// wildcard, and carries the prose that says where the value comes from.
 	getTaskSchema := toolSchema("get_task")

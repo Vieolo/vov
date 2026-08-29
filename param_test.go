@@ -1,6 +1,7 @@
 package vov
 
 import (
+	"encoding/json"
 	"net/http"
 	"testing"
 )
@@ -124,5 +125,84 @@ func TestReservedDescriptionPrefixIsRejected(t *testing.T) {
 	}
 	if err := BodyOf[fine]().Err(); err != nil {
 		t.Fatalf("a description containing = was rejected: %v", err)
+	}
+}
+
+// --- repeated query parameters ----------------------------------------------
+
+type listQuery struct {
+	Tag  []string `json:"tag" jsonschema:"repeat to filter by several tags"`
+	View string   `json:"view"`
+}
+
+// TestQueryOfAndDispatchAgreeOnLists is the halves agreeing again. QueryOf has
+// always accepted a list of scalars; dispatch used to refuse it, so a
+// declaration vov validated at construction could still fail at call time — the
+// one kind of failure the rest of vov is arranged to make impossible.
+func TestQueryOfAndDispatchAgreeOnLists(t *testing.T) {
+	if err := QueryOf[listQuery]().Err(); err != nil {
+		t.Fatalf("QueryOf rejected a list of scalars: %v", err)
+	}
+
+	got, err := queryArg(json.RawMessage(`["a","b","c"]`))
+	if err != nil {
+		t.Fatalf("dispatch rejected what QueryOf accepted: %v", err)
+	}
+	if len(got) != 3 || got[0] != "a" || got[2] != "c" {
+		t.Errorf("got %v, want [a b c]", got)
+	}
+}
+
+// TestQueryArgRepeatsRatherThanOverwrites: the values become a repeated
+// parameter, not the last one winning.
+func TestQueryArgRepeatsRatherThanOverwrites(t *testing.T) {
+	tool := boundTool{path: "/x", queryNames: []string{"tag"}}
+	_, query, _, err := tool.splitArgs(map[string]json.RawMessage{"tag": json.RawMessage(`["a","b"]`)})
+	if err != nil {
+		t.Fatalf("splitArgs: %v", err)
+	}
+	if got := query["tag"]; len(got) != 2 {
+		t.Fatalf("query carried %v, want two values", got)
+	}
+	if query.Encode() != "tag=a&tag=b" {
+		t.Errorf("encoded as %q, want %q", query.Encode(), "tag=a&tag=b")
+	}
+}
+
+// TestQueryArgScalarsAreUnchanged: the list support did not alter what a plain
+// value does, including an empty one meaning "omitted".
+func TestQueryArgScalarsAreUnchanged(t *testing.T) {
+	for _, tc := range []struct {
+		raw  string
+		want []string
+	}{
+		{`"fit"`, []string{"fit"}},
+		{`7`, []string{"7"}},
+		{`true`, []string{"true"}},
+		{`""`, nil},
+		{`null`, nil},
+	} {
+		got, err := queryArg(json.RawMessage(tc.raw))
+		if err != nil {
+			t.Errorf("%s: %v", tc.raw, err)
+			continue
+		}
+		if len(got) != len(tc.want) || (len(got) == 1 && got[0] != tc.want[0]) {
+			t.Errorf("%s: got %v, want %v", tc.raw, got, tc.want)
+		}
+	}
+}
+
+// TestQueryArgRejectsNestedLists: a list of objects is what QueryOf refuses at
+// construction, and dispatch refuses the same thing rather than encoding it.
+func TestQueryArgRejectsNestedLists(t *testing.T) {
+	if _, err := queryArg(json.RawMessage(`[{"a":1}]`)); err == nil {
+		t.Fatal("a list of objects was accepted as a query value")
+	}
+	type nested struct {
+		A []struct{ B string } `json:"a"`
+	}
+	if err := QueryOf[nested]().Err(); err == nil {
+		t.Fatal("QueryOf accepted a list of objects")
 	}
 }

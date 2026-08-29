@@ -102,13 +102,51 @@ func itemEndpoints() vov.Endpoints {
 type listTasksQuery struct {
 	Owner string `json:"owner" jsonschema:"filter to one owner, matched exactly against the name a task was created under"`
 	Limit int    `json:"limit" jsonschema:"how many tasks to return; omit for all of them"`
+	// A list of scalars becomes a repeated query parameter — ?tag=a&tag=b — and
+	// an array argument in the tool schema. QueryOf permits it and dispatch
+	// honours it; a list of objects is refused by both.
+	Tag []string `json:"tag" jsonschema:"repeat to narrow to tasks carrying every listed tag"`
 }
 
+// listTasks renders a narrower row for an assistant than for a browser.
+//
+// This is the permitted side of vov.RequestMode's line, and worth being explicit
+// about because the line is easy to read too strictly. What varies here is how
+// much of each record is rendered — the wiring. What does not vary is which
+// records are returned, who may see them, or what the call does: the endpoint's
+// declared policy decided all of that before this handler ran, identically on
+// both channels.
+//
+// The reason to bother is that the two callers are not alike. A browser paints a
+// table and wants every column. A model pays for each field in context it did not
+// need, and a wide row makes it likelier to answer from a stale summary rather
+// than fetching the record it actually needs. An app metering full reads has a
+// second reason, and it is the same one.
+//
+// Where this would stop being legitimate: filtering out rows one channel may not
+// see. That is the declaration's job — RolesAnyOf, MinTier, ScopeAllOf — and
+// doing it here would put a policy nobody can review behind a handler.
 func listTasks(w http.ResponseWriter, r *http.Request) {
 	d := deps.Get()
 	out := d.Store.all()
-	d.Log.Debug("listed tasks", "count", len(out))
+	d.Log.Debug("listed tasks", "count", len(out), "mode", string(vov.ModeFrom(r.Context())))
+
+	if vov.ModeFrom(r.Context()) == vov.RequestModeMCP {
+		rows := make([]taskRow, 0, len(out))
+		for _, t := range out {
+			rows = append(rows, taskRow{ID: t.ID, Title: t.Title})
+		}
+		writeJSON(w, http.StatusOK, rows)
+		return
+	}
 	writeJSON(w, http.StatusOK, out)
+}
+
+// taskRow is the compact shape an assistant is given: enough to choose a task
+// and then ask for it by id, and nothing else.
+type taskRow struct {
+	ID    int    `json:"id"`
+	Title string `json:"title"`
 }
 
 // createTaskInput is both what createTask decodes into and what the endpoint

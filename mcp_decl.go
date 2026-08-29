@@ -1,6 +1,7 @@
 package vov
 
 import (
+	"context"
 	"log/slog"
 )
 
@@ -102,6 +103,13 @@ type MCPConfig struct {
 	// complaint about something already done. It runs on the calling goroutine,
 	// so a sink that blocks delays the call; push to a channel if that matters.
 	//
+	// The context is the call's, with cancellation stripped
+	// ([context.WithoutCancel]). Its values are there — a trace id, whatever an
+	// application's own middleware put on the request — so a row can be
+	// correlated with the rest of a trace. Its cancellation is not, deliberately:
+	// this runs after the endpoint has committed, so an assistant hanging up must
+	// not be what loses the record of what it did.
+	//
 	// # It is handed raw arguments
 	//
 	// [ToolCall.Arguments] is what the assistant sent, undecoded and
@@ -115,7 +123,7 @@ type MCPConfig struct {
 	// putting private text somewhere it was never meant to go. Record the field
 	// names, or a length, or a hash — record the values only if that is a
 	// decision someone made on purpose.
-	OnToolCall func(ToolCall)
+	OnToolCall func(context.Context, ToolCall)
 
 	// Logger, if set, receives protocol-level logging from the tool server.
 	Logger *slog.Logger
