@@ -41,8 +41,13 @@ type ToolCall struct {
 	// Tool is the name the assistant called.
 	Tool string
 
-	// Arguments are the arguments it sent, undecoded, and are empty when the
-	// call failed before they were read.
+	// Arguments are the arguments it sent, undecoded, and are empty only when
+	// the call failed before they were read.
+	//
+	// They are a copy, taken before vov routes them. Routing consumes the
+	// argument object as it places each value in the path, the query or the
+	// body, so a record sharing it would keep only what vov could not place —
+	// nothing at all, for a tool whose inputs are all path parameters.
 	//
 	// They are raw on purpose. vov does not know which of an application's
 	// fields hold a person's name, a note body, or anything else worth being
