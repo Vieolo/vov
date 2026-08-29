@@ -1,5 +1,12 @@
 # Changelog
 
+## v0.4.0 (2026-08-29)
+- Query fields declared as a list of scalars are now dispatched as repeated parameters (`?tag=a&tag=b`). `QueryOf` always accepted them and the dispatcher rejected them, so a declaration `vov` validated at construction could still fail at call time
+- `BodyOf` now advises declaring the type describing the contract, which may be narrower than the one the handler decodes into. Declaring a domain model offers an assistant every field on it, including the ones the server owns
+
+#### Breaking changes
+- `OnToolCall` now receives the call's `context.Context`, with the cancellation stripped, so a sink can reach a trace id without losing a row when the client disconnects
+
 ## v0.3.1 (2026-08-29)
 - Body and query fields can now carry a description
 - Path parameters gained `Endpoint.PathParams`, giving a route wildcard a caller-facing name and a description
