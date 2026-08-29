@@ -19,7 +19,6 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
-	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -240,12 +239,18 @@ type user struct {
 
 func (u *user) IsAuthenticated() bool { return u != nil && u.name != "" }
 
-func (u *user) HasRole(role string) bool {
-	return u != nil && slices.Contains(u.roles, role)
+func (u *user) Roles() []string {
+	if u == nil {
+		return nil
+	}
+	return u.roles
 }
 
-func (u *user) HasPermission(perm string) bool {
-	return u != nil && slices.Contains(u.perms, perm)
+func (u *user) Permissions() []string {
+	if u == nil {
+		return nil
+	}
+	return u.perms
 }
 
 func (u *user) Tier() int {

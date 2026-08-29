@@ -27,6 +27,7 @@ type Server struct {
 	TLSConfig *tls.Config
 
 	// default: 15 * time.Second
+	//
 	// ReadTimeout is the maximum duration for reading the entire
 	// request, including the body. A zero or negative value means
 	// there will be no timeout.
@@ -38,6 +39,7 @@ type Server struct {
 	ReadTimeout *time.Duration
 
 	// default: 10 * time.Second
+	//
 	// ReadHeaderTimeout is the amount of time allowed to read
 	// request headers. The connection's read deadline is reset
 	// after reading the headers and the Handler can decide what
@@ -47,6 +49,7 @@ type Server struct {
 	ReadHeaderTimeout *time.Duration
 
 	// default: 15 * time.Second
+	//
 	// WriteTimeout is the maximum duration before timing out
 	// writes of the response. It is reset whenever a new
 	// request's header is read. Like ReadTimeout, it does not
@@ -55,6 +58,7 @@ type Server struct {
 	WriteTimeout *time.Duration
 
 	// default: 60 * time.Second
+	//
 	// IdleTimeout is the maximum amount of time to wait for the
 	// next request when keep-alives are enabled. If zero, the value
 	// of ReadTimeout is used. If negative, or if zero and ReadTimeout
@@ -200,6 +204,8 @@ func (s *Server) ToNetHTTPServer(addr string, handler http.Handler) *http.Server
 // inline instead of through a temporary variable:
 //
 //	vov.Server{ReadTimeout: vov.Ptr(30 * time.Second)}
+//
+//go:fix inline
 func Ptr[T any](v T) *T {
-	return &v
+	return new(v)
 }

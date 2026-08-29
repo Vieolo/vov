@@ -45,15 +45,16 @@ type Endpoint struct {
 	// requirement that silently does nothing.
 	PermissionsAllOf []string
 
-	// ScopeAllOf restricts the endpoint to credentials carrying every listed
-	// scope — see [ScopeRule]. It is a different axis from PermissionsAllOf: a
-	// permission belongs to the principal, a scope to the key in their hand.
+	// ScopeAllOf restricts the endpoint to credentials carrying all of the listed
+	// scopes per channel. It is a different axis from permissions as permissions
+	// are applied to user, regardless of the auth method/token while a single
+	// user can have multiple auth tokens, each with a different scope
 	//
-	// Nil says nothing and takes [AppConfig.Scopes]'s per-method default, which is
-	// how an app keeps a new endpoint governed without anyone remembering to
-	// declare it. Declaring [ScopeNone] is how an endpoint opts out of that
-	// default on purpose.
-	ScopeAllOf *ScopeRule
+	//	ScopeAllOf: vov.ScopeAllOf{vov.RequestModeMCP: {"tasks:write"}}
+	//
+	// Providing a key for this field will override the scopes of that mode, described
+	// in [AppConfig.Scopes]. For more detail, see [ScopeAllOf]
+	ScopeAllOf ScopeAllOf
 
 	// PathParams documents this route's wildcards, keyed by the wildcard name —
 	// see [PathParam]. It is how a path parameter gets a caller-facing name and a
@@ -113,7 +114,7 @@ func (e Endpoint) declared() bool {
 		len(e.RolesAnyOf) > 0 ||
 		len(e.PermissionsAllOf) > 0 ||
 		e.MinTier != 0 ||
-		e.ScopeAllOf != nil ||
+		len(e.ScopeAllOf) > 0 ||
 		len(e.PathParams) > 0 ||
 		e.Body != nil ||
 		e.Query != nil ||
@@ -134,7 +135,7 @@ func (e Endpoint) constrained() bool {
 // either, so choosing a different stack can never switch authentication off —
 // only [AuthMode] does that. See [authGuard]. An endpoint declaring
 // [AuthModeNone] has no guard and no user, so its stack's Post half is skipped.
-func (e Endpoint) wrapped(s MiddlewareStack, auth Authenticator, sc *scopeCheck) http.Handler {
+func (e Endpoint) wrapped(s MiddlewareStack, auth Authenticator, sc scopeCheck) http.Handler {
 	var h http.Handler = e.Handler
 	if e.AuthMode.required() {
 		h = apply(h, s.Post)

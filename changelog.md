@@ -1,5 +1,11 @@
 # Changelog
 
+## v0.5.0 (2026-08-29)
+
+#### Breaking changes
+- `User.HasRole` and `User.HasPermission` are replaced by `User.Roles()` and `User.Permissions()`. `vov` now fetches each set once and does the matching itself, so an endpoint listing three permissions costs one lookup instead of three. Return the effective set, expanding whatever your model implies
+- `Endpoint.ScopeAllOf` is now a `map[RequestMode][]string` and `ScopeRule` is gone. A channel you name overrides the app-level scope; one you leave out inherits it; an empty list requires none. `ScopeNone()` returns the map that requires none anywhere
+
 ## v0.4.1 (2026-08-29)
 - Fixed `ToolCall.Arguments` arriving empty. It is now copied before routing, which also keeps a rejected call's record whole
 - A tool argument the endpoint does not declare is now refused, naming it and listing what the tool does accept, instead of being marshalled into the request body
