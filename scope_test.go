@@ -371,7 +371,7 @@ func TestResolveScope(t *testing.T) {
 				MCP: map[string][]string{http.MethodGet: {"three"}},
 			},
 		),
-		&scopeCheck{RequestModeAPI: []string{"one"}, RequestModeMCP: []string{"three"}},
+		scopeCheck{RequestModeAPI: []string{"one"}, RequestModeMCP: []string{"three"}},
 	)
 
 	// local and app cover two different methods
@@ -384,7 +384,7 @@ func TestResolveScope(t *testing.T) {
 				MCP: map[string][]string{http.MethodGet: {"three"}},
 			},
 		),
-		&scopeCheck{RequestModeAPI: []string{"one"}},
+		scopeCheck{RequestModeAPI: []string{"one"}},
 	)
 
 	// local overrides nothing
@@ -397,7 +397,20 @@ func TestResolveScope(t *testing.T) {
 				MCP: map[string][]string{http.MethodGet: {"three"}},
 			},
 		),
-		&scopeCheck{RequestModeAPI: []string{"two"}, RequestModeMCP: []string{"three"}},
+		scopeCheck{RequestModeAPI: []string{"two"}, RequestModeMCP: []string{"three"}},
+	)
+
+	// an empty list overrides the app rather than inheriting it
+	assert.Equal(t,
+		resolveScope(
+			Endpoint{ScopeAllOf: ScopeAllOf{RequestModeAPI: []string{}}},
+			http.MethodGet,
+			&ScopePolicy{
+				API: map[string][]string{http.MethodGet: {"two"}},
+				MCP: map[string][]string{http.MethodGet: {"three"}},
+			},
+		),
+		scopeCheck{RequestModeMCP: []string{"three"}},
 	)
 
 	// endpoint does not require auth

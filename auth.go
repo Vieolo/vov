@@ -296,7 +296,7 @@ func UserFrom(ctx context.Context) (User, bool) {
 // also the cheapest check — the scopes came off the credential during
 // authentication and are already in memory, while Roles and Permissions are
 // where an application is invited to do lazy I/O.
-func authGuard(next http.Handler, auth Authenticator, e Endpoint, sc *scopeCheck) http.Handler {
+func authGuard(next http.Handler, auth Authenticator, e Endpoint, sc scopeCheck) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var (
 			u      User

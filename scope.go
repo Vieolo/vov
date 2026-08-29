@@ -79,22 +79,13 @@ func (p *ScopePolicy) byMode(m RequestMode) map[string][]string {
 type scopeCheck map[RequestMode][]string
 
 // requiredIn reports the scopes a request arriving on m must carry.
-func (s *scopeCheck) requiredIn(m RequestMode) []string {
-	if s == nil {
-		return nil
-	}
-	v, ok := (*s)[m]
-	if !ok {
-		return nil
-	}
-	return v
-}
+func (s scopeCheck) requiredIn(m RequestMode) []string { return s[m] }
 
 // resolveScope resolves an endpoint's effective requirement, per channel.
 //
 // The endpoint decides a channel by naming it; otherwise the policy's per-method
 // default applies. The two channels need not agree.
-func resolveScope(e Endpoint, method string, p *ScopePolicy) *scopeCheck {
+func resolveScope(e Endpoint, method string, p *ScopePolicy) scopeCheck {
 	// An open endpoint resolves no credential, so there is nothing to check a
 	// scope against. A default must not reach it: the manifest would render a
 	// requirement that is never enforced, and a reviewer would read it as
@@ -117,7 +108,7 @@ func resolveScope(e Endpoint, method string, p *ScopePolicy) *scopeCheck {
 	if len(byMode) == 0 {
 		return nil
 	}
-	return &byMode
+	return byMode
 }
 
 // validateScopes rejects a scope declaration that cannot mean what it says.

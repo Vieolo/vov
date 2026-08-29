@@ -135,7 +135,7 @@ func (e Endpoint) constrained() bool {
 // either, so choosing a different stack can never switch authentication off —
 // only [AuthMode] does that. See [authGuard]. An endpoint declaring
 // [AuthModeNone] has no guard and no user, so its stack's Post half is skipped.
-func (e Endpoint) wrapped(s MiddlewareStack, auth Authenticator, sc *scopeCheck) http.Handler {
+func (e Endpoint) wrapped(s MiddlewareStack, auth Authenticator, sc scopeCheck) http.Handler {
 	var h http.Handler = e.Handler
 	if e.AuthMode.required() {
 		h = apply(h, s.Post)
