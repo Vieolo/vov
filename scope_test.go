@@ -5,6 +5,8 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+
+	"github.com/stretchr/testify/assert"
 )
 
 // scopedApp builds an app whose one protected route requires the given rule, and
@@ -357,3 +359,56 @@ func (countingUser) IsAuthenticated() bool   { return true }
 func (u countingUser) Roles() []string       { *u.roles++; return []string{"admin"} }
 func (u countingUser) Permissions() []string { *u.perms++; return []string{"a", "b", "c"} }
 func (countingUser) Tier() int               { return 0 }
+
+func TestResolveScope(t *testing.T) {
+	// local overrides app
+	assert.Equal(t,
+		resolveScope(
+			Endpoint{ScopeAllOf: ScopeAllOf{RequestModeAPI: []string{"one"}}},
+			http.MethodGet,
+			&ScopePolicy{
+				API: map[string][]string{http.MethodGet: {"two"}},
+				MCP: map[string][]string{http.MethodGet: {"three"}},
+			},
+		),
+		&scopeCheck{RequestModeAPI: []string{"one"}, RequestModeMCP: []string{"three"}},
+	)
+
+	// local and app cover two different methods
+	assert.Equal(t,
+		resolveScope(
+			Endpoint{ScopeAllOf: ScopeAllOf{RequestModeAPI: []string{"one"}}},
+			http.MethodPut,
+			&ScopePolicy{
+				API: map[string][]string{http.MethodGet: {"two"}},
+				MCP: map[string][]string{http.MethodGet: {"three"}},
+			},
+		),
+		&scopeCheck{RequestModeAPI: []string{"one"}},
+	)
+
+	// local overrides nothing
+	assert.Equal(t,
+		resolveScope(
+			Endpoint{},
+			http.MethodGet,
+			&ScopePolicy{
+				API: map[string][]string{http.MethodGet: {"two"}},
+				MCP: map[string][]string{http.MethodGet: {"three"}},
+			},
+		),
+		&scopeCheck{RequestModeAPI: []string{"two"}, RequestModeMCP: []string{"three"}},
+	)
+
+	// endpoint does not require auth
+	assert.Nil(t,
+		resolveScope(
+			Endpoint{AuthMode: AuthModeNone},
+			http.MethodGet,
+			&ScopePolicy{
+				API: map[string][]string{http.MethodGet: {"two"}},
+				MCP: map[string][]string{http.MethodGet: {"three"}},
+			},
+		),
+	)
+}

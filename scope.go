@@ -76,16 +76,18 @@ func (p *ScopePolicy) byMode(m RequestMode) map[string][]string {
 // scopeCheck is a rule resolved against one endpoint at construction, so the
 // guard does no lookup per request. It is per channel, because the two can
 // require different things.
-type scopeCheck struct {
-	byMode map[RequestMode][]string
-}
+type scopeCheck map[RequestMode][]string
 
 // requiredIn reports the scopes a request arriving on m must carry.
 func (s *scopeCheck) requiredIn(m RequestMode) []string {
 	if s == nil {
 		return nil
 	}
-	return s.byMode[m]
+	v, ok := (*s)[m]
+	if !ok {
+		return nil
+	}
+	return v
 }
 
 // resolveScope resolves an endpoint's effective requirement, per channel.
@@ -101,7 +103,7 @@ func resolveScope(e Endpoint, method string, p *ScopePolicy) *scopeCheck {
 		return nil
 	}
 
-	byMode := map[RequestMode][]string{}
+	byMode := make(scopeCheck)
 	for _, m := range allModes {
 		allOf, declared := e.ScopeAllOf[m]
 		if !declared {
@@ -115,7 +117,7 @@ func resolveScope(e Endpoint, method string, p *ScopePolicy) *scopeCheck {
 	if len(byMode) == 0 {
 		return nil
 	}
-	return &scopeCheck{byMode: byMode}
+	return &byMode
 }
 
 // validateScopes rejects a scope declaration that cannot mean what it says.
